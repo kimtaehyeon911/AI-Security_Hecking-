@@ -74,3 +74,16 @@ Thumbs.db
 *.tmp
 .cache/
 ```
+
+---
+
+## 📈 Verifiable TradingAgents System (branch: `claude/verifiable-trading-system-dmsmz9`)
+
+This branch hosts a separate work stream: a **verifiable automated-trading system** built on a fork of
+[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache-2.0), adopting
+Trading-R1's evidence-based thesis → 5-tier rating (`Buy/Overweight/Hold/Underweight/Sell`).
+
+Priority order: **(1) backtest harness → (2) paper trading → (3) live trading (kill-switch mandatory, last)**.
+
+- Step 0 code-reading analysis: [`docs/step0_code_reading.md`](docs/step0_code_reading.md)
+- Running decision log: [`docs/DECISIONS.md`](docs/DECISIONS.md)
