@@ -29,7 +29,42 @@ cache keyed by `(ticker, date, model, prompt-hash)` + `N=3` majority-vote rating
 **Blocked on user inputs** (environment placeholders unfilled): asset class, broker/exchange API,
 LLM provider + monthly budget, trading cadence. See §12 of the Step 0 doc.
 
-## Step 1 — Data layer (pending approval)
+## Step 1 — Data layer (done)
+New `vts` package (Python 3.12, uv, pydantic v2, pytest). Environment values fixed as reasonable
+defaults, all env-overridable via `VTS_*` (see `.env.example`, `vts/config.py`):
+
+| 항목 | 값 |
+|---|---|
+| 대상 자산 | 미국주식 (US equities) |
+| 데이터 소스 (백테스트) | Alpha Vantage (`NEWS_SENTIMENT` publish-time; `EARNINGS` reportedDate; raw prices) |
+| LLM | deepseek — deep=`deepseek-v4-pro`, quick=`deepseek-v4-flash`, temp=0 |
+| 월 예산 | $30 |
+| 매매 주기 | 일봉 1회 (`1d`) |
+
+Key decisions:
+1. **Two-timestamp model.** Every record carries `event_time` (subject moment) and `knowledge_time`
+   (when first knowable). As-of reads return only `knowledge_time <= clock`. This defeats both Step 0
+   leaks: (a) auto-adjust price restatement — we store **raw** OHLCV and treat adjustment as an as-of
+   *view* using only known splits (`vts/pit/adjust.py`); (b) future news — news is keyed by publish time.
+2. **Enforced guard at egress.** `assert_no_lookahead` / `filter_visible(strict=True)` re-check every
+   record leaving the store (redundant with the SQL `knowledge_time <= T` filter) → a leaked future row
+   raises `LookaheadError`, never silently inflates a metric.
+3. **Append-only + restatement collapse.** A correction is a new row (higher `revision`, later
+   `knowledge_time`); reads return the latest-known revision per series as-of `T`. Fundamentals keyed by
+   `reportedDate` (exact) or `fiscal_end + lag` (estimated, flagged).
+4. **yfinance-free path.** PIT store registers as a TradingAgents `"pit"` vendor
+   (`vts/integration/`), clock injected per decision via a `contextvar`. Full graph wiring is Step 2.
+5. **Determinism/seed/cache and the reflection look-ahead gate are Step 2** (not the data layer).
+
+Tests: 29 passing incl. falsification (future ingestion cannot change a past as-of view; store never
+returns a future record; guard catches hand-crafted leaks; restatement flips at restatement date; split
+adjustment ignores not-yet-known splits). Secrets: `.env` gitignored, no keys committed.
+
+Follow-up (tracked for Step 2): route TradingAgents' two hard yfinance couplings
+(`get_verified_market_snapshot`, `resolve_instrument_identity`) and `_fetch_returns` through the PIT
+store; neutralize `_resolve_pending_entries` reflection look-ahead; add model knowledge-cutoff registry;
+SQLite `check_same_thread`/locking for threaded graph reads.
+
 ## Step 2 — Backtest engine (pending)
 ## Step 3 — Evaluation (pending)
 ## Step 4 — Risk layer (pending)
