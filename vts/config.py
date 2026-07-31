@@ -8,10 +8,22 @@ NOT stored here — they are read from the environment by the adapters (see
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+
+def _env_float(name: str, value: str) -> float:
+    """Parse a float env var, raising a clear, named error (not a raw ValueError)."""
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid numeric value for {name}: {value!r}") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return parsed
 
 _DEFAULT_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"]
 
@@ -61,9 +73,11 @@ class Settings(BaseModel):
         if "VTS_QUICK_THINK_LLM" in env:
             raw["quick_think_llm"] = env["VTS_QUICK_THINK_LLM"]
         if "VTS_TEMPERATURE" in env:
-            raw["temperature"] = float(env["VTS_TEMPERATURE"])
+            raw["temperature"] = _env_float("VTS_TEMPERATURE", env["VTS_TEMPERATURE"])
         if "VTS_MONTHLY_BUDGET_USD" in env:
-            raw["monthly_budget_usd"] = float(env["VTS_MONTHLY_BUDGET_USD"])
+            raw["monthly_budget_usd"] = _env_float(
+                "VTS_MONTHLY_BUDGET_USD", env["VTS_MONTHLY_BUDGET_USD"]
+            )
         if "VTS_CADENCE" in env:
             raw["cadence"] = env["VTS_CADENCE"]
         if "VTS_DATA_DIR" in env:

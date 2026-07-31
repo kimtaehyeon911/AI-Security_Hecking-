@@ -54,8 +54,12 @@ class PITDataProvider:
 
     # -- prices ---------------------------------------------------------------
     def get_stock_data(self, symbol: str, start_date: str, end_date: str, clock: AsOfClock) -> str:
+        # end_date is a calendar day; a daily bar's event_time is the session close
+        # (e.g. 21:00 UTC), so an inclusive end must extend to end-of-day or the
+        # decision date's own bar is dropped. Push the upper bound to next midnight
+        # (the clock still caps visibility, so this cannot leak).
         bars = self._store.get_ohlcv(
-            symbol, clock, start=_parse_date(start_date), end=_parse_date(end_date)
+            symbol, clock, start=_parse_date(start_date), end=_parse_date(end_date) + _one_day()
         )
         if not bars:
             return f"No point-in-time price data for {symbol} up to {clock.as_of.date()}."
@@ -94,6 +98,19 @@ class PITDataProvider:
             )
         return "\n".join(lines)
 
+    # -- graceful stubs for categories not yet ingested in Step 1 --------------
+    def get_global_news(self, curr_date: str, clock: AsOfClock) -> str:
+        return (
+            f"No point-in-time global/macro news in the vts store as-of "
+            f"{clock.as_of.date()} (Step 1 ingests per-symbol news only)."
+        )
+
+    def get_insider_transactions(self, symbol: str, clock: AsOfClock) -> str:
+        return (
+            f"No insider-transaction data in the vts store for {symbol} "
+            f"(not ingested in Step 1)."
+        )
+
 
 def _one_day():
     from datetime import timedelta
@@ -101,12 +118,52 @@ def _one_day():
     return timedelta(days=1)
 
 
-def register_pit_vendor(store: PointInTimeStore, *, set_as_default: bool = True) -> None:
+def build_pit_impls(provider: PITDataProvider) -> dict:
+    """Return the ``method_name -> callable`` map the ``"pit"`` vendor provides.
+
+    Every callable reads the current as-of clock (never live data) and delegates
+    to ``provider``. Covers the full method set of the price / fundamentals / news
+    categories so routing an analyst tool to ``"pit"`` can never hit a missing
+    implementation. Indicators, macro and prediction-markets are intentionally NOT
+    here — they keep their own vendors until Step 2 wires them to the PIT store.
+    """
+    def _stock(symbol: str, start_date: str, end_date: str, *_a, **_k) -> str:
+        return provider.get_stock_data(symbol, start_date, end_date, _require_clock())
+
+    def _news(ticker: str, start_date: str, end_date: str, *_a, **_k) -> str:
+        return provider.get_news(ticker, start_date, end_date, _require_clock())
+
+    def _fundamentals(ticker: str, curr_date: str = "", *_a, **_k) -> str:
+        return provider.get_fundamentals(ticker, curr_date, _require_clock())
+
+    def _global_news(curr_date: str, *_a, **_k) -> str:
+        return provider.get_global_news(curr_date, _require_clock())
+
+    def _insider(ticker: str, *_a, **_k) -> str:
+        return provider.get_insider_transactions(ticker, _require_clock())
+
+    # Balance sheet / cash flow / income statement share the unified Step 1
+    # fundamentals view (statement-type separation is a Step 2 refinement).
+    return {
+        "get_stock_data": _stock,
+        "get_news": _news,
+        "get_fundamentals": _fundamentals,
+        "get_balance_sheet": _fundamentals,
+        "get_cashflow": _fundamentals,
+        "get_income_statement": _fundamentals,
+        "get_global_news": _global_news,
+        "get_insider_transactions": _insider,
+    }
+
+
+def register_pit_vendor(store: PointInTimeStore, *, set_as_default: bool = True) -> list[str]:
     """Register the ``"pit"`` vendor into TradingAgents' ``VENDOR_METHODS``.
 
     Raises ``ImportError`` with a clear message if TradingAgents is not installed.
-    When ``set_as_default`` is True, points every core data category at ``"pit"``
-    so the agent graph reads only the point-in-time store (no yfinance).
+    Returns the list of method names registered. When ``set_as_default`` is True,
+    routes **only the implemented methods** to ``"pit"`` via per-method
+    ``tool_vendors`` (never a category-wide default), so a method we do not
+    implement is never dispatched to ``"pit"`` — closing the over-scoping crash.
     """
     try:
         from tradingagents.dataflows import interface as ta_interface  # type: ignore
@@ -117,24 +174,15 @@ def register_pit_vendor(store: PointInTimeStore, *, set_as_default: bool = True)
             "graph. Install the fork (Step 2 wiring) before calling this."
         ) from exc
 
-    provider = PITDataProvider(store)
-
-    def _stock(symbol: str, start_date: str, end_date: str, *_a, **_k) -> str:
-        return provider.get_stock_data(symbol, start_date, end_date, _require_clock())
-
-    def _news(ticker: str, start_date: str, end_date: str, *_a, **_k) -> str:
-        return provider.get_news(ticker, start_date, end_date, _require_clock())
-
-    def _fundamentals(ticker: str, curr_date: str, *_a, **_k) -> str:
-        return provider.get_fundamentals(ticker, curr_date, _require_clock())
-
-    ta_interface.VENDOR_METHODS.setdefault("get_stock_data", {})["pit"] = _stock
-    ta_interface.VENDOR_METHODS.setdefault("get_news", {})["pit"] = _news
-    ta_interface.VENDOR_METHODS.setdefault("get_fundamentals", {})["pit"] = _fundamentals
+    impls = build_pit_impls(PITDataProvider(store))
+    for method, fn in impls.items():
+        ta_interface.VENDOR_METHODS.setdefault(method, {})["pit"] = fn
 
     if set_as_default:
         cfg = get_config()
-        cfg.setdefault("data_vendors", {})
-        for category in ("core_stock_apis", "fundamental_data", "news_data"):
-            cfg["data_vendors"][category] = "pit"
+        tool_vendors = cfg.setdefault("tool_vendors", {})
+        for method in impls:
+            tool_vendors[method] = "pit"  # per-method: only implemented methods route to pit
         set_config(cfg)
+
+    return list(impls)

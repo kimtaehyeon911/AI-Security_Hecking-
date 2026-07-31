@@ -61,18 +61,45 @@ def _date_at(date_str: str, hour_utc: int) -> datetime:
     return d.replace(hour=hour_utc, minute=0, second=0, tzinfo=_UTC)
 
 
-def _parse_published(ts: str) -> datetime:
-    """Parse Alpha Vantage ``time_published`` ('YYYYMMDDTHHMMSS', UTC)."""
-    return datetime.strptime(ts, "%Y%m%dT%H%M%S").replace(tzinfo=_UTC)
+def _parse_published(ts: str) -> datetime | None:
+    """Parse Alpha Vantage ``time_published`` (UTC).
+
+    The documented format is ``YYYYMMDDTHHMMSS`` (15 chars); tolerate the
+    minute-precision ``YYYYMMDDTHHMM`` (13 chars) variant too. Dispatch by length
+    rather than trying formats in sequence: ``strptime`` backtracks, so a
+    seconds-format parse of ``"0930"`` would wrongly yield 09:03:00. Returns
+    ``None`` on any unparseable value so a single malformed row is skipped rather
+    than aborting the whole news batch.
+    """
+    ts = ts.strip()
+    fmt = {15: "%Y%m%dT%H%M%S", 13: "%Y%m%dT%H%M"}.get(len(ts))
+    if fmt is None:
+        return None
+    try:
+        return datetime.strptime(ts, fmt).replace(tzinfo=_UTC)
+    except ValueError:
+        return None
+
+
+_SENTINEL_STRINGS = (None, "", "None", "none", "N/A", "na", "-")
 
 
 def _f(value: object) -> float | None:
     try:
-        if value in (None, "", "None", "-"):
+        if value in _SENTINEL_STRINGS:
             return None
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _s(value: object, default: str) -> str:
+    """Return ``value`` as a string, mapping vendor sentinel strings to ``default``.
+
+    Alpha Vantage emits the literal string ``"None"`` (not JSON null) for unset
+    fields, so ``x or default`` is wrong — ``"None"`` is truthy.
+    """
+    return default if value in _SENTINEL_STRINGS else str(value)
 
 
 # --------------------------------------------------------------------- mappers
@@ -153,16 +180,20 @@ def map_news_feed(symbol: str, payload: dict) -> list[NewsItem]:
     items: list[NewsItem] = []
     for art in feed:
         ts = art.get("time_published")
-        if not ts:
-            # No publish time -> cannot place it in time -> must not be usable in a
-            # historical window. Skip rather than guess (mirrors Step 0 policy).
+        published = _parse_published(ts) if ts else None
+        if published is None:
+            # No (usable) publish time -> cannot place it in time -> must not be
+            # usable in a historical window. Skip rather than guess (Step 0 policy).
             continue
-        published = _parse_published(ts)
         sentiment = _f(art.get("overall_sentiment_score"))
         relevance = None
         for ts_row in art.get("ticker_sentiment", []):
             if ts_row.get("ticker", "").strip().upper() == sym:
-                sentiment = _f(ts_row.get("ticker_sentiment_score")) or sentiment
+                # `is not None`, not `or`: a genuine per-ticker score of exactly
+                # 0.0 (neutral) is falsy and must not fall back to overall.
+                ticker_score = _f(ts_row.get("ticker_sentiment_score"))
+                if ticker_score is not None:
+                    sentiment = ticker_score
                 relevance = _f(ts_row.get("relevance_score"))
                 break
         # Clamp sentiment into schema bounds [-1, 1] defensively.
@@ -252,7 +283,7 @@ def map_statements(
                 continue
             event = _date_at(fiscal, 0)
             know = event + timedelta(days=lag)
-            currency = row.get("reportedCurrency") or "USD"
+            currency = _s(row.get("reportedCurrency"), "USD")
             for metric, raw in row.items():
                 if metric in ("fiscalDateEnding", "reportedCurrency"):
                     continue

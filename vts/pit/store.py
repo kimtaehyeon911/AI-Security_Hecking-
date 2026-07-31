@@ -20,8 +20,9 @@ Design choices:
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from vts.pit.clock import AsOfClock
@@ -37,12 +38,21 @@ from vts.pit.schema import (
     model_for_kind,
 )
 
-_US = 1_000_000
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_ONE_US = timedelta(microseconds=1)
 
 
 def _to_us(dt: datetime) -> int:
-    """Microseconds since epoch (UTC). Assumes tz-aware (schema guarantees it)."""
-    return int(dt.astimezone(timezone.utc).timestamp() * _US)
+    """Microseconds since epoch (UTC), computed with EXACT integer arithmetic.
+
+    Deliberately not ``int(dt.timestamp() * 1_000_000)``: float multiplication
+    floors ~1µs low for a fraction of sub-second timestamps, which would make the
+    store's integer ``knowledge_us <= T`` filter disagree with the guard's exact
+    datetime comparison at microsecond boundaries (spurious LookaheadError) and
+    collide distinct sub-second event_times into one series key. Integer/timedelta
+    division is exact at every microsecond.
+    """
+    return (dt.astimezone(timezone.utc) - _EPOCH) // _ONE_US
 
 
 def _series_key(rec: KnowledgeTimedRecord) -> tuple:
@@ -69,9 +79,14 @@ class PointInTimeStore:
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         self._path = str(path)
-        self._conn = sqlite3.connect(self._path)
+        # check_same_thread=False + an explicit lock: the Step 2 backtest harness
+        # (and LangGraph) may issue reads from worker threads. The lock serializes
+        # all access so the shared connection stays consistent.
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._lock = threading.RLock()
+        if self._path != ":memory:":
+            self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_schema()
 
     # ------------------------------------------------------------------ schema
@@ -112,21 +127,22 @@ class PointInTimeStore:
     def append_many(self, records: Iterable[AnyRecord]) -> int:
         """Insert many records; returns the count written."""
         n = 0
-        for rec in records:
-            table = self._table(rec.kind)
-            self._conn.execute(
-                f"INSERT INTO {table} (symbol, event_us, knowledge_us, revision, payload) "
-                f"VALUES (?, ?, ?, ?, ?)",
-                (
-                    rec.symbol,
-                    _to_us(rec.event_time),
-                    _to_us(rec.knowledge_time),
-                    rec.revision,
-                    rec.model_dump_json(),
-                ),
-            )
-            n += 1
-        self._conn.commit()
+        with self._lock:
+            for rec in records:
+                table = self._table(rec.kind)
+                self._conn.execute(
+                    f"INSERT INTO {table} (symbol, event_us, knowledge_us, revision, payload) "
+                    f"VALUES (?, ?, ?, ?, ?)",
+                    (
+                        rec.symbol,
+                        _to_us(rec.event_time),
+                        _to_us(rec.knowledge_time),
+                        rec.revision,
+                        rec.model_dump_json(),
+                    ),
+                )
+                n += 1
+            self._conn.commit()
         return n
 
     # ------------------------------------------------------------------- reads
@@ -162,7 +178,8 @@ class PointInTimeStore:
             params.append(_to_us(event_end))
         sql += " ORDER BY event_us ASC, knowledge_us ASC, revision ASC"
 
-        rows: Sequence[sqlite3.Row] = self._conn.execute(sql, params).fetchall()
+        with self._lock:
+            rows: Sequence[sqlite3.Row] = self._conn.execute(sql, params).fetchall()
         records = [model.model_validate_json(r["payload"]) for r in rows]
 
         if latest_per_series:
