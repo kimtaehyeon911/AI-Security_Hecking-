@@ -30,16 +30,26 @@ _RATING_BY_VALUE = {r.value.lower(): r for r in Rating}
 def rating_from_text(text: str, default: Rating = Rating.HOLD) -> Rating:
     """Tolerantly extract a 5-tier rating from prose (mirrors TA's parse_rating).
 
-    Looks for an explicit 'Rating: X' first, then the first rating word anywhere.
-    Falls back to ``default`` (Hold) — the same conservative default the risk layer
-    uses for unparseable output.
+    On a line carrying a ``Rating:`` label, anchor to the value that FOLLOWS the
+    label — not the first rating word anywhere on the line. Otherwise a narrative
+    like ``"Sell-off risk; Rating: Hold"`` would mis-parse to Sell. Only when no
+    labelled line exists does it fall back to the first rating word anywhere, and
+    finally to ``default`` (Hold) — the conservative default the risk layer uses.
+    (The structured graph output always carries the ``**Rating**: X`` label, so the
+    anchored branch is the real path; the free scan is a last resort.)
     """
     for line in text.splitlines():
         low = line.lower()
-        if "rating" in low:
-            for token in low.replace(":", " ").replace("*", " ").replace("-", " ").split():
-                if token in _RATING_BY_VALUE:
-                    return _RATING_BY_VALUE[token]
+        if "rating" not in low:
+            continue
+        tokens = low.replace(":", " ").replace("*", " ").replace("-", " ").split()
+        for i, tok in enumerate(tokens):
+            if "rating" in tok:
+                for nxt in tokens[i + 1:]:
+                    if nxt in _RATING_BY_VALUE:
+                        return _RATING_BY_VALUE[nxt]
+                break  # label found but no rating value after it on this line
+
     for token in text.lower().replace("*", " ").split():
         clean = token.strip(":.,")
         if clean in _RATING_BY_VALUE:

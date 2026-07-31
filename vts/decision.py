@@ -112,12 +112,17 @@ def aggregate_decisions(samples: list[Decision]) -> AggregatedDecision:
     ordinals = [_ORDINAL[s.rating] for s in samples]
     dispersion = statistics.pstdev(ordinals) if len(ordinals) > 1 else 0.0
 
+    # agreement is the fraction that chose the EMITTED rating. On a tie the emitted
+    # rating is Hold, whose count is usually below the tied top count — so use the
+    # emitted rating's own count, not best_count, or a tie would overstate support.
+    agreement = counts.get(rating, 0) / len(samples)
+
     return AggregatedDecision(
         ticker=samples[0].ticker,
         as_of=samples[0].as_of,
         rating=rating,
         n_samples=len(samples),
-        agreement=best_count / len(samples),
+        agreement=agreement,
         dispersion=dispersion,
         mean_confidence=sum(s.confidence for s in samples) / len(samples),
         votes={r.value: c for r, c in counts.items()},

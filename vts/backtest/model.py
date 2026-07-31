@@ -55,7 +55,15 @@ class FakeMomentumModel:
         self.p = params or MomentumParams()
 
     def prompt_for(self, ticker: str, clock: AsOfClock) -> str:
-        return f"momentum(lb={self.p.lookback_bars}):{ticker.upper()}@{clock.as_of.isoformat()}"
+        # Encode EVERY param that affects decide(): the cache key hashes this prompt,
+        # so a param change must alter it or a persistent cache would serve stale
+        # ratings computed under a different configuration.
+        p = self.p
+        return (
+            f"momentum(lb={p.lookback_bars},strong={p.strong_threshold},"
+            f"mild={p.mild_threshold},cscale={p.confidence_scale}):"
+            f"{ticker.upper()}@{clock.as_of.isoformat()}"
+        )
 
     def _momentum(self, ticker: str, clock: AsOfClock) -> float | None:
         bars = self._store.get_ohlcv(ticker, clock)

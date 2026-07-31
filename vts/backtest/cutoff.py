@@ -45,7 +45,13 @@ class CutoffRegistry:
         entry = self._models.get(model_id)
         if not entry or not entry.get("verified") or not entry.get("cutoff"):
             return None
-        return datetime.strptime(entry["cutoff"], "%Y-%m-%d").date()
+        try:
+            return datetime.strptime(entry["cutoff"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            # A malformed 'verified' date is not certifiable -> degrade to UNKNOWN
+            # (return None) rather than crashing the whole backtest. The gate never
+            # certifies a segment clean on a value it cannot parse.
+            return None
 
     def classify(self, model_id: str, decision_date: date | datetime) -> Contamination:
         """Classify one decision date for one model."""

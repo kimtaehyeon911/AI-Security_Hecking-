@@ -146,33 +146,38 @@ class Backtester:
         result = BacktestResult(config=cfg, model_id=self.model.model_id)
 
         equity = cfg.initial_capital
+        # `weights` holds the DRIFTED actual weights carried into each date (not the
+        # last booked target), so turnover costs reflect the real trades required.
         weights: dict[str, float] = {t: 0.0 for t in universe}
         prev_prices: dict[str, float] | None = None
 
-        # Equal-weight buy&hold benchmark (a fuller benchmark suite lands in Step 3).
-        bench_equity = cfg.initial_capital
-        bench_weights: dict[str, float] | None = None
+        # True equal-weight BUY&HOLD benchmark: shares bought once and held (weights
+        # drift with prices), with a one-time entry cost so the comparison is fair.
+        bench_shares: dict[str, float] | None = None
+        bench_entry_cost = 0.0
 
         for d in sorted(decision_dates):
             clock = AsOfClock.at(d)
             prices = {t: _last_close(self.store, t, clock) for t in universe}
             priced = {t: p for t, p in prices.items() if p is not None}
 
-            # 1) Mark-to-market the return realized since the previous rebalance.
+            # 1) Mark-to-market the realized return since the previous rebalance,
+            #    then reconcile intra-period drift into the carried weights so the
+            #    next turnover calc charges for the real drift-correction trades.
             if prev_prices is not None:
-                r = sum(
-                    weights.get(t, 0.0) * (priced[t] / prev_prices[t] - 1.0)
-                    for t in priced
-                    if t in prev_prices and prev_prices[t] > 0
-                )
+                rets = {
+                    t: priced[t] / prev_prices[t] - 1.0
+                    for t in weights
+                    if t in priced and t in prev_prices and prev_prices[t] > 0
+                }
+                r = sum(weights.get(t, 0.0) * rt for t, rt in rets.items())
                 equity *= 1.0 + r
-                if bench_weights is not None:
-                    br = sum(
-                        bench_weights.get(t, 0.0) * (priced[t] / prev_prices[t] - 1.0)
-                        for t in priced
-                        if t in prev_prices and prev_prices[t] > 0
-                    )
-                    bench_equity *= 1.0 + br
+                denom = 1.0 + r
+                if denom > 0:
+                    weights = {
+                        t: weights.get(t, 0.0) * (1.0 + rets.get(t, 0.0)) / denom
+                        for t in weights
+                    }
 
             # 2) Decide (N-sample majority vote) using only data as-of the clock.
             aggs = {t: sample_decisions(self.model, self.cache, t, clock, cfg.n_samples)
@@ -180,7 +185,8 @@ class Backtester:
             target = _target_weights(aggs, cfg.long_only, cfg.max_gross)
             target = {t: target.get(t, 0.0) for t in universe}
 
-            # 3) Charge turnover costs at this date using ADV known at the clock.
+            # 3) Charge turnover costs (drifted -> target) using ADV known at the clock.
+            carried_in = equity
             cost_total = 0.0
             turnover = 0.0
             for t in universe:
@@ -194,10 +200,22 @@ class Backtester:
                 cost_total += self.cost_model.cost(notional, adv, side).total
             equity -= cost_total
 
-            # Benchmark enters equal-weight on the first priced date, then holds.
-            if bench_weights is None and priced:
-                ew = 1.0 / len(priced)
-                bench_weights = {t: ew for t in priced}
+            # Benchmark buys equal-weight shares on the first priced date and holds.
+            if bench_shares is None and priced:
+                alloc = cfg.initial_capital / len(priced)
+                bench_shares = {t: alloc / priced[t] for t in priced}
+                bench_entry_cost = sum(
+                    self.cost_model.cost(
+                        alloc, _dollar_adv(self.store, t, clock, cfg.adv_lookback), "buy"
+                    ).total
+                    for t in priced
+                )
+            if bench_shares:
+                bench_equity = sum(
+                    bench_shares[t] * priced[t] for t in bench_shares if t in priced
+                ) - bench_entry_cost
+            else:
+                bench_equity = cfg.initial_capital
 
             contamination = self.cutoff.segment_status(self.model.model_id, [d]).value
             disp = [a.dispersion for a in aggs.values()]
@@ -205,7 +223,7 @@ class Backtester:
             result.records.append(
                 DateRecord(
                     date=d,
-                    equity=equity + cost_total,  # equity carried in (before costs) for the curve
+                    equity=carried_in,  # mark-to-market equity carried in (before costs)
                     cost=cost_total,
                     turnover=turnover,
                     weights=dict(target),

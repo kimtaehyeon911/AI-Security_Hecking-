@@ -57,9 +57,14 @@ def partition_pending(
 ) -> ReflectionSplit:
     """Split pending entries into resolvable-now vs deferred at ``trade_date``.
 
-    An entry is resolvable iff its holding window has fully closed on or before the
-    simulated ``trade_date``. Resolving it therefore reads only prices that a real
-    observer at ``trade_date`` already has.
+    Uses a **calendar-day** maturity test (``entry_date + holding_days <=
+    trade_date``) as a *necessary* pre-filter: it can never mark an entry resolvable
+    before ``holding_days`` real days have passed, so resolution never reads a price
+    from the future. Final scoring (``returns.realized_return``) counts *trading
+    bars*, which span >= the same number of calendar days, so a gate-resolvable
+    entry may still be unscorable until enough bars exist — ``resolvable_reflections``
+    simply omits it and it stays pending until a later date. The gate is thus
+    look-ahead-safe (never early); trading-bar scoring only ever defers further.
     """
     if holding_days < 0:
         raise ValueError("holding_days must be non-negative")
