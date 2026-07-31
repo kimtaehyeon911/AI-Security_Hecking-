@@ -17,6 +17,7 @@ from datetime import datetime
 from vts.backtest.cache import DecisionCache, decision_key
 from vts.backtest.costs import CostModel
 from vts.backtest.cutoff import Contamination, CutoffRegistry
+from vts.backtest.llm_costs import LLMCostTracker
 from vts.backtest.model import DecisionModel
 from vts.backtest.splitter import Fold
 from vts.decision import AggregatedDecision, aggregate_decisions, rating_to_signed_weight
@@ -65,6 +66,11 @@ class BacktestResult:
     def total_return(self) -> float:
         return self.final_equity / self.config.initial_capital - 1.0
 
+    @property
+    def n_decisions(self) -> int:
+        """Aggregated (ticker, date) decisions made — the denominator of 결정 1건당 비용."""
+        return sum(len(r.ratings) for r in self.records)
+
 
 @dataclass(frozen=True, slots=True)
 class SegmentReport:
@@ -80,9 +86,18 @@ class SegmentReport:
 
 # --------------------------------------------------------------------- sampling
 def sample_decisions(
-    model: DecisionModel, cache: DecisionCache, ticker: str, clock: AsOfClock, n: int
+    model: DecisionModel,
+    cache: DecisionCache,
+    ticker: str,
+    clock: AsOfClock,
+    n: int,
+    tracker: LLMCostTracker | None = None,
 ) -> AggregatedDecision:
-    """Draw ``n`` cached samples and return the majority-vote aggregate."""
+    """Draw ``n`` cached samples and return the majority-vote aggregate.
+
+    A cache miss is a real model invocation and is recorded on ``tracker`` (a hit
+    costs nothing) — this is where the cost-per-call metric gets its counts.
+    """
     prompt = model.prompt_for(ticker, clock)
     samples = []
     for i in range(n):
@@ -91,6 +106,10 @@ def sample_decisions(
         if cached is None:
             cached = model.decide(ticker, clock)
             cache.put(key, cached)
+            if tracker is not None:
+                tracker.record_call()
+        elif tracker is not None:
+            tracker.record_cache_hit()
         samples.append(cached)
     return aggregate_decisions(samples)
 
@@ -133,6 +152,7 @@ class Backtester:
         cutoff: CutoffRegistry | None = None,
         cache: DecisionCache | None = None,
         config: BacktestConfig | None = None,
+        llm_tracker: LLMCostTracker | None = None,
     ) -> None:
         self.store = store
         self.model = model
@@ -140,6 +160,7 @@ class Backtester:
         self.cutoff = cutoff or CutoffRegistry.load()
         self.cache = cache or DecisionCache()
         self.config = config or BacktestConfig()
+        self.llm_tracker = llm_tracker or LLMCostTracker()
 
     def run(self, universe: list[str], decision_dates: list[datetime]) -> BacktestResult:
         cfg = self.config
@@ -180,8 +201,12 @@ class Backtester:
                     }
 
             # 2) Decide (N-sample majority vote) using only data as-of the clock.
-            aggs = {t: sample_decisions(self.model, self.cache, t, clock, cfg.n_samples)
-                    for t in priced}
+            aggs = {
+                t: sample_decisions(
+                    self.model, self.cache, t, clock, cfg.n_samples, self.llm_tracker
+                )
+                for t in priced
+            }
             target = _target_weights(aggs, cfg.long_only, cfg.max_gross)
             target = {t: target.get(t, 0.0) for t in universe}
 

@@ -99,7 +99,28 @@ Tests: falsification (future ingestion cannot change engine ratings; model decis
 bars; reflection gate never resolves an unfinished window), plus cost monotonicity/participation, cutoff
 classification, cache determinism, walk-forward tiling, vote/dispersion.
 
-## Step 3 — Evaluation (pending)
+## Step 3 — Evaluation (done, pending approval)
+`vts/backtest/{metrics,benchmarks,llm_costs,evaluate}.py` — the mandated metric set, benchmark suite,
+LLM cost accounting, and the hard gate.
+
+Key decisions:
+1. **Metrics** (`metrics.py`, pure functions, hand-computed tests): total return, CAGR, Sharpe, Sortino,
+   MDD, 승률, 평균손익비, 연환산 회전율. Annualization uses actual elapsed calendar time, not bar counts.
+   Conventions stated once: MDD positive fraction; flat curve → Sharpe/Sortino 0 (no evidence ≠ infinite
+   skill); no-loss window → 손익비 None (undefined, not ∞).
+2. **Benchmarks** (`benchmarks.py`): share-based buy&hold and 60/40, both entry-costed and drift-honest
+   (no free rebalancing — Step 2 review lesson applied). 60/40's 40% is **cash at configurable
+   `rf_annual` (default 0)**, not a fabricated bond return; documented in-module.
+3. **Gate in code** (`evaluate.py::_gate`): after-cost total return must **strictly beat every**
+   benchmark (buy&hold AND 60/40) or verdict = FAIL. Beat threshold includes a 1e-9 epsilon so
+   floating-point noise between compounded and ratio returns can never flip the gate (found by test).
+   A PASS on a non-cutoff-clean window is labelled 참고용(오염 가능) and `certifiable=False` — numbers
+   can never certify success on a contaminated/unknown window.
+4. **LLM cost metrics** (`llm_costs.py`): cache-miss = real call; tracker feeds LLM 호출당 비용 and
+   결정 1건당 총 비용 + monthly-budget check ($30 default from Step 1 env).
+5. `render_report` emits the side-by-side markdown table (strategy | buy&hold | 60/40) with after-cost
+   alpha per benchmark, cost block, contamination label, and gate verdict.
+
 ## Step 4 — Risk layer (pending)
 ## Step 5 — Paper trading (pending)
 ## Step 6 — Live (pending, explicit approval only)
