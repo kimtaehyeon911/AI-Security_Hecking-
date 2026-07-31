@@ -25,6 +25,18 @@ class LLMCostTracker:
     def __post_init__(self) -> None:
         self._lock = threading.Lock()
 
+    # A threading.Lock cannot be pickled/deep-copied; drop it from state and
+    # recreate a fresh lock on restore so snapshotting a Backtester (or shipping
+    # a tracker to a worker process) works.
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
     def record_call(self, cost_usd: float | None = None) -> None:
         """One real model invocation (a cache miss). ``None`` cost uses the estimate."""
         with self._lock:

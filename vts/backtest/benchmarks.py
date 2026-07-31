@@ -9,10 +9,22 @@ the strategy-vs-benchmark comparison is after-cost on both sides:
 - **60/40**: 60% the same equity basket + 40% cash accruing ``rf_annual``.
   Classic 60/40 holds bonds; with an equity-only PIT store we proxy the 40% as
   cash at a configurable risk-free rate (default 0 — we do not fabricate a bond
-  return). Stated here once so nobody mistakes it for a bond sleeve.
+  return). Stated here once so nobody mistakes it for a bond sleeve; the rendered
+  evaluation report also discloses it.
 
-All prices are read as-of each date's clock, so benchmarks obey the same
-no-look-ahead regime as the strategy.
+Conventions (aligned with the strategy engine so the gate is symmetric):
+
+- Prices are read as-of each date's clock (no look-ahead), and only strictly
+  positive closes count as "priced" — a schema-valid zero close never divides.
+- The ENTRY point of a curve is pre-cost capital; the entry cost is subtracted
+  from every LATER point. Folding the cost into the first point would cancel it
+  out of last/first total_return and make the benchmark effectively pre-cost.
+- Curves start AT the entry date. Padding earlier dates with flat capital would
+  dilute the benchmark's win rate and Sharpe with fabricated 0% periods.
+- Basket membership is frozen at entry (that is what buy&hold means). When some
+  universe tickers list later, the strategy can trade names the benchmark never
+  held — :func:`entry_basket` exposes membership so the evaluation report can
+  disclose the mismatch instead of hiding it.
 """
 
 from __future__ import annotations
@@ -23,6 +35,34 @@ from vts.backtest.costs import CostModel
 from vts.backtest.engine import _dollar_adv, _last_close
 from vts.pit.clock import AsOfClock
 from vts.pit.store import PointInTimeStore
+
+
+def _priced_at(
+    store: PointInTimeStore, universe: list[str], clock: AsOfClock
+) -> dict[str, float]:
+    """Tickers with a strictly positive last close as-of ``clock``."""
+    out: dict[str, float] = {}
+    for t in universe:
+        p = _last_close(store, t, clock)
+        if p is not None and p > 0:
+            out[t] = p
+    return out
+
+
+def entry_basket(
+    store: PointInTimeStore, universe: list[str], dates: list[datetime]
+) -> tuple[list[str], datetime | None]:
+    """The benchmark's frozen membership: tickers priced at the first priced date.
+
+    Returns ``(sorted tickers, entry_date)`` — or ``([], None)`` when nothing in
+    the universe is ever priced. Used by the evaluation report to disclose any
+    gap between the benchmark basket and the strategy's evolving universe.
+    """
+    for d in sorted(dates):
+        priced = _priced_at(store, universe, AsOfClock.at(d))
+        if priced:
+            return sorted(priced), d
+    return [], None
 
 
 def _entry_and_shares(
@@ -39,7 +79,7 @@ def _entry_and_shares(
     """
     for i, d in enumerate(sorted(dates)):
         clock = AsOfClock.at(d)
-        priced = {t: p for t in universe if (p := _last_close(store, t, clock)) is not None}
+        priced = _priced_at(store, universe, clock)
         if not priced:
             continue
         alloc = capital / len(priced)
@@ -70,20 +110,21 @@ def buy_and_hold_curve(
     cost_model: CostModel | None = None,
     adv_lookback: int = 20,
 ) -> list[tuple[datetime, float]]:
-    """Equal-weight buy&hold: buy once (with entry cost), let weights drift."""
+    """Equal-weight buy&hold: buy once, entry cost drags every later point."""
     cost_model = cost_model or CostModel()
     ordered = sorted(dates)
     entered = _entry_and_shares(store, universe, ordered, capital, cost_model, adv_lookback)
-    curve: list[tuple[datetime, float]] = []
     if entered is None:
         return [(d, capital) for d in ordered]
     shares, entry_cost, entry_idx = entered
+    curve: list[tuple[datetime, float]] = []
     for i, d in enumerate(ordered):
         if i < entry_idx:
-            curve.append((d, capital))
-            continue
-        value = _basket_value(store, shares, AsOfClock.at(d)) - entry_cost
-        curve.append((d, value))
+            continue  # curve starts at entry; no fabricated flat periods
+        if i == entry_idx:
+            curve.append((d, capital))  # pre-cost entry point (strategy convention)
+        else:
+            curve.append((d, _basket_value(store, shares, AsOfClock.at(d)) - entry_cost))
     return curve
 
 
@@ -110,19 +151,21 @@ def sixty_forty_curve(
     eq_capital = capital * equity_fraction
     cash = capital * (1.0 - equity_fraction)
     entered = _entry_and_shares(store, universe, ordered, eq_capital, cost_model, adv_lookback)
-    curve: list[tuple[datetime, float]] = []
     if entered is None:
         return [(d, capital) for d in ordered]
     shares, entry_cost, entry_idx = entered
+    curve: list[tuple[datetime, float]] = []
     prev_date: datetime | None = None
     for i, d in enumerate(ordered):
         if i < entry_idx:
-            curve.append((d, capital))
             continue
         if prev_date is not None and rf_annual != 0.0:
             dt_years = (d - prev_date).total_seconds() / (365.25 * 24 * 3600)
             cash *= (1.0 + rf_annual) ** dt_years
-        equity_value = _basket_value(store, shares, AsOfClock.at(d)) - entry_cost
-        curve.append((d, equity_value + cash))
+        if i == entry_idx:
+            curve.append((d, capital))  # pre-cost entry point
+        else:
+            equity_value = _basket_value(store, shares, AsOfClock.at(d)) - entry_cost
+            curve.append((d, equity_value + cash))
         prev_date = d
     return curve

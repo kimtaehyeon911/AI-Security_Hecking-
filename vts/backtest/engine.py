@@ -32,6 +32,11 @@ class BacktestConfig:
     max_gross: float = 1.0        # sum of |weights| ceiling (full risk limits are Step 4)
     long_only: bool = True
     adv_lookback: int = 20
+    # Annual risk-free rate accrued on the strategy's UNINVESTED fraction between
+    # rebalances. Set it to the same value passed to evaluate(rf_annual=...) so the
+    # strategy's idle cash and the 60/40 benchmark's cash sleeve earn the same
+    # rate — otherwise a low-exposure strategy is structurally penalized.
+    rf_annual: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,14 +58,31 @@ class BacktestResult:
     model_id: str
     records: list[DateRecord] = field(default_factory=list)
     benchmark_curve: list[tuple[datetime, float]] = field(default_factory=list)
+    # Per-run LLM accounting (delta of the tracker over THIS run only, so a
+    # reused Backtester/tracker never double-counts into evaluate()).
+    llm_calls: int = 0
+    llm_cache_hits: int = 0
+    llm_cost_usd: float = 0.0
 
     @property
     def equity_curve(self) -> list[tuple[datetime, float]]:
-        return [(r.date, r.equity) for r in self.records]
+        """Equity per date. Each date's turnover cost surfaces in the NEXT record's
+        mark-to-market; the final date has no successor, so the terminal point is
+        made post-cost here — otherwise the last rebalance's cost would vanish
+        from total_return and the gate would compare a partially pre-cost number.
+        """
+        pts = [(r.date, r.equity) for r in self.records]
+        if pts:
+            last = self.records[-1]
+            pts[-1] = (last.date, last.equity - last.cost)
+        return pts
 
     @property
     def final_equity(self) -> float:
-        return self.records[-1].equity if self.records else self.config.initial_capital
+        if not self.records:
+            return self.config.initial_capital
+        last = self.records[-1]
+        return last.equity - last.cost  # post-cost, matching equity_curve's terminal point
 
     @property
     def total_return(self) -> float:
@@ -166,11 +188,18 @@ class Backtester:
         cfg = self.config
         result = BacktestResult(config=cfg, model_id=self.model.model_id)
 
+        # Snapshot the tracker so this run's LLM accounting is a clean delta even
+        # when the Backtester (and its tracker) is reused across multiple runs.
+        calls0 = self.llm_tracker.calls
+        hits0 = self.llm_tracker.cache_hits
+        cost0 = self.llm_tracker.total_cost_usd
+
         equity = cfg.initial_capital
         # `weights` holds the DRIFTED actual weights carried into each date (not the
         # last booked target), so turnover costs reflect the real trades required.
         weights: dict[str, float] = {t: 0.0 for t in universe}
         prev_prices: dict[str, float] | None = None
+        prev_date: datetime | None = None
 
         # True equal-weight BUY&HOLD benchmark: shares bought once and held (weights
         # drift with prices), with a one-time entry cost so the comparison is fair.
@@ -180,7 +209,9 @@ class Backtester:
         for d in sorted(decision_dates):
             clock = AsOfClock.at(d)
             prices = {t: _last_close(self.store, t, clock) for t in universe}
-            priced = {t: p for t, p in prices.items() if p is not None}
+            # p > 0, not just present: a schema-valid zero close must not enter
+            # share division or return math (consistent with the P&L guard below).
+            priced = {t: p for t, p in prices.items() if p is not None and p > 0}
 
             # 1) Mark-to-market the realized return since the previous rebalance,
             #    then reconcile intra-period drift into the carried weights so the
@@ -192,6 +223,12 @@ class Backtester:
                     if t in priced and t in prev_prices and prev_prices[t] > 0
                 }
                 r = sum(weights.get(t, 0.0) * rt for t, rt in rets.items())
+                # Idle cash earns the configured risk-free rate (same rate the
+                # 60/40 benchmark's cash sleeve gets — see BacktestConfig.rf_annual).
+                if cfg.rf_annual != 0.0 and prev_date is not None:
+                    cash_frac = max(0.0, 1.0 - sum(abs(w) for w in weights.values()))
+                    dt_years = (d - prev_date).total_seconds() / (365.25 * 24 * 3600)
+                    r += cash_frac * ((1.0 + cfg.rf_annual) ** dt_years - 1.0)
                 equity *= 1.0 + r
                 denom = 1.0 + r
                 if denom > 0:
@@ -226,6 +263,7 @@ class Backtester:
             equity -= cost_total
 
             # Benchmark buys equal-weight shares on the first priced date and holds.
+            bench_entered_now = False
             if bench_shares is None and priced:
                 alloc = cfg.initial_capital / len(priced)
                 bench_shares = {t: alloc / priced[t] for t in priced}
@@ -235,10 +273,17 @@ class Backtester:
                     ).total
                     for t in priced
                 )
+                bench_entered_now = True
             if bench_shares:
-                bench_equity = sum(
-                    bench_shares[t] * priced[t] for t in bench_shares if t in priced
-                ) - bench_entry_cost
+                if bench_entered_now:
+                    # Entry point is PRE-cost capital (same convention as the
+                    # strategy's first curve point); subtracting the entry cost
+                    # here would cancel it out of last/first total_return.
+                    bench_equity = cfg.initial_capital
+                else:
+                    bench_equity = sum(
+                        bench_shares[t] * priced[t] for t in bench_shares if t in priced
+                    ) - bench_entry_cost
             else:
                 bench_equity = cfg.initial_capital
 
@@ -262,7 +307,11 @@ class Backtester:
 
             weights = target
             prev_prices = priced or prev_prices
+            prev_date = d
 
+        result.llm_calls = self.llm_tracker.calls - calls0
+        result.llm_cache_hits = self.llm_tracker.cache_hits - hits0
+        result.llm_cost_usd = self.llm_tracker.total_cost_usd - cost0
         return result
 
     def segment_reports(self, result: BacktestResult, folds: list[Fold]) -> list[SegmentReport]:

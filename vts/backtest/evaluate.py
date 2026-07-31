@@ -14,7 +14,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from vts.backtest.benchmarks import buy_and_hold_curve, sixty_forty_curve
+from vts.backtest.benchmarks import buy_and_hold_curve, entry_basket, sixty_forty_curve
 from vts.backtest.costs import CostModel
 from vts.backtest.cutoff import Contamination
 from vts.backtest.engine import Backtester, BacktestResult
@@ -58,6 +58,9 @@ class CostReport(BaseModel):
     cost_per_decision_usd: float | None   # 결정 1건당 총 비용
     n_decisions: int
     monthly_budget_usd: float | None
+    # Budget semantics are per-month, so the check normalizes total window cost to
+    # a monthly run-rate (window floored at one day to avoid a zero divisor).
+    monthly_run_rate_usd: float | None
     within_budget: bool | None
 
 
@@ -71,6 +74,11 @@ class EvaluationReport(BaseModel):
     benchmarks: dict[str, PerformanceMetrics]
     gate: GateResult
     costs: CostReport
+    # Benchmark assumptions, disclosed so the rendered report is self-describing.
+    rf_annual: float
+    benchmark_basket: tuple[str, ...]
+    basket_entry_date: datetime | None
+    universe: tuple[str, ...]
 
 
 def _gate(
@@ -153,20 +161,26 @@ def evaluate(
     }
     benchmarks = {name: compute_metrics(c, rf_annual=rf_annual) for name, c in bench_curves.items()}
 
-    tracker = backtester.llm_tracker
+    # Per-run LLM accounting from the result itself — NOT the tracker's lifetime
+    # totals, which accumulate across runs when a Backtester is reused.
     n_dec = result.n_decisions
+    total_cost = result.llm_cost_usd
+    window_days = max((dates[-1] - dates[0]).total_seconds() / 86400.0, 1.0)
+    months = window_days / 30.4375
+    run_rate = total_cost / months
     costs = CostReport(
-        llm_calls=tracker.calls,
-        cache_hits=tracker.cache_hits,
-        total_cost_usd=tracker.total_cost_usd,
-        cost_per_call_usd=tracker.cost_per_call,
-        cost_per_decision_usd=tracker.cost_per_decision(n_dec),
+        llm_calls=result.llm_calls,
+        cache_hits=result.llm_cache_hits,
+        total_cost_usd=total_cost,
+        cost_per_call_usd=(total_cost / result.llm_calls) if result.llm_calls else None,
+        cost_per_decision_usd=(total_cost / n_dec) if n_dec else None,
         n_decisions=n_dec,
         monthly_budget_usd=monthly_budget_usd,
-        within_budget=(
-            None if monthly_budget_usd is None else tracker.total_cost_usd <= monthly_budget_usd
-        ),
+        monthly_run_rate_usd=None if monthly_budget_usd is None else run_rate,
+        within_budget=(None if monthly_budget_usd is None else run_rate <= monthly_budget_usd),
     )
+
+    basket, basket_entry = entry_basket(store, universe, dates)
 
     return EvaluationReport(
         model_id=result.model_id,
@@ -176,6 +190,10 @@ def evaluate(
         benchmarks=benchmarks,
         gate=_gate(result, strategy, benchmarks),
         costs=costs,
+        rf_annual=rf_annual,
+        benchmark_basket=tuple(basket),
+        basket_entry_date=basket_entry,
+        universe=tuple(sorted(t.upper() for t in universe)),
     )
 
 
@@ -201,10 +219,21 @@ def render_report(report: EvaluationReport) -> str:
         ("Annual turnover", lambda m: _fmt(m.annual_turnover)),
     ]
 
+    basket = ", ".join(report.benchmark_basket) or "(empty — universe never priced)"
+    missing = sorted(set(report.universe) - set(report.benchmark_basket))
     lines = [
         f"# Evaluation — {report.model_id}",
         f"Period: {report.period_start.date()} → {report.period_end.date()}  ",
         f"Contamination: **{report.gate.contamination}**",
+        "",
+        "Benchmark assumptions: 60/40 = 60% equal-weight equity basket + 40% **cash** at "
+        f"rf_annual={report.rf_annual:.2%} (cash proxy, not bonds). "
+        f"Basket (frozen at entry{f', {report.basket_entry_date.date()}' if report.basket_entry_date else ''}): {basket}."
+        + (
+            f" ⚠ universe tickers never in the basket (strategy-only opportunity set): {', '.join(missing)}."
+            if missing
+            else ""
+        ),
         "",
         "| metric | " + " | ".join(cols) + " |",
         "|---|" + "---|" * len(cols),
@@ -228,7 +257,10 @@ def render_report(report: EvaluationReport) -> str:
     ]
     if cost.monthly_budget_usd is not None:
         state = "within" if cost.within_budget else "OVER"
-        lines.append(f"- budget: {state} ${cost.monthly_budget_usd:.2f}/month")
+        lines.append(
+            f"- budget: {state} ${cost.monthly_budget_usd:.2f}/month "
+            f"(run-rate ${cost.monthly_run_rate_usd:.2f}/month over the evaluated window)"
+        )
 
     lines += ["", f"## Gate: {'PASS' if report.gate.passed else 'FAIL'}", report.gate.verdict]
     return "\n".join(lines)

@@ -119,7 +119,24 @@ Key decisions:
 4. **LLM cost metrics** (`llm_costs.py`): cache-miss = real call; tracker feeds LLM 호출당 비용 and
    결정 1건당 총 비용 + monthly-budget check ($30 default from Step 1 env).
 5. `render_report` emits the side-by-side markdown table (strategy | buy&hold | 60/40) with after-cost
-   alpha per benchmark, cost block, contamination label, and gate verdict.
+   alpha per benchmark, cost block, contamination label, benchmark-assumption disclosure, and gate verdict.
+
+Adversarial review round 3 (metric-math / gate-fairness / robustness lenses): **14 confirmed findings,
+all fixed** with regressions (`tests/test_review_fixes_step3.py`). Highlights:
+- HIGH: the final rebalance date's cost was charged internally but never reached the equity curve the
+  gate scores → terminal curve point / `final_equity` are now post-cost.
+- HIGH: evaluate() divided the tracker's *lifetime* LLM cost by one run's decision count → per-run
+  deltas are now snapshotted onto `BacktestResult` and evaluate() reads only those.
+- Fairness: benchmark entry cost was absorbed into the curve's first point (cancelled out of
+  total_return) → entry point is pre-cost, cost drags later points (matching the strategy convention);
+  pre-entry flat padding removed (it diluted benchmark Sharpe/win-rate); frozen basket membership is
+  disclosed in the report with a warning when it differs from the universe; strategy idle cash now
+  accrues `BacktestConfig.rf_annual` so a nonzero rf no longer credits only the 60/40 cash sleeve.
+- Math: CAGR computed in log space (no OverflowError on short windows); curves are truncated at the
+  first non-positive equity point so ppy/n_periods/win-rate share one sample; per-period returns clamped
+  at -100%; all-flat 손익비 → None; all-negative-curve MDD → 1.0; pstdev convention documented.
+- Robustness: schema-valid zero-close bars excluded from share division (engine + benchmarks); budget
+  check normalized to a monthly run-rate; tracker pickle/deepcopy-safe.
 
 ## Step 4 — Risk layer (pending)
 ## Step 5 — Paper trading (pending)
