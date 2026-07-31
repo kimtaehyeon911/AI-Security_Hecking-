@@ -87,3 +87,7 @@ Priority order: **(1) backtest harness → (2) paper trading → (3) live tradin
 
 - Step 0 code-reading analysis: [`docs/step0_code_reading.md`](docs/step0_code_reading.md)
 - Running decision log: [`docs/DECISIONS.md`](docs/DECISIONS.md)
+
+Progress: **Step 0** (code map), **Step 1** (`vts/pit`, `vts/sources` — point-in-time data layer),
+**Step 2** (`vts/backtest` — walk-forward engine: cost model, cutoff gate, N=3 vote, no-lookahead
+execution). Run tests with `.venv/bin/python -m pytest`.

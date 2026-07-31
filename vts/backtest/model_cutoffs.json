@@ -1,0 +1,10 @@
+{
+  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the selected model's cutoff or its decisions may be contaminated by memorized future outcomes. Fill in exact dates and set verified=true once confirmed from the provider's docs. Unknown/unverified models are treated conservatively by the gate (status 'unknown' -> not certifiable as clean). Dates are ISO 'YYYY-MM-DD' (the last date the model could know about).",
+  "models": {
+    "deepseek-v4-pro":   {"cutoff": null, "verified": false, "note": "set from DeepSeek docs before trusting a clean segment"},
+    "deepseek-v4-flash": {"cutoff": null, "verified": false, "note": "set from DeepSeek docs before trusting a clean segment"},
+    "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs"},
+    "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs"},
+    "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs"}
+  }
+}

@@ -65,7 +65,40 @@ Follow-up (tracked for Step 2): route TradingAgents' two hard yfinance couplings
 store; neutralize `_resolve_pending_entries` reflection look-ahead; add model knowledge-cutoff registry;
 SQLite `check_same_thread`/locking for threaded graph reads.
 
-## Step 2 — Backtest engine (pending)
+## Step 2 — Backtest engine (done, pending approval)
+Walk-forward backtest harness in `vts/backtest/` + decision schema `vts/decision.py`. Same strategy as
+Step 1: a real TradingAgents adapter (guarded) plus a deterministic offline model so the whole engine is
+testable without an LLM/API/network.
+
+Key decisions:
+1. **Look-ahead-free timing.** At each rebalance date `D` the model decides using only data as-of `D`'s
+   close (the as-of clock); the resulting weights earn the **realized** close-to-close return from `D` to
+   `D_next` (pure P&L, never a decision input). Costs are charged on turnover at `D` using trailing ADV
+   known at `D`. Prices/ADV come from the PIT store, so a decision can never read a future price.
+2. **Reflection look-ahead neutralized (Step 0's #1 leak).** `vts/backtest/reflection_gate.py`
+   `partition_pending` resolves a prior decision only once its holding window closed
+   (`entry_date + holding_days <= trade_date`); `vts/backtest/returns.py::realized_return` scores it from
+   the PIT store capped at the as-of clock (replacing TradingAgents' live-yfinance `_fetch_returns`).
+   Falsification test written first (`tests/test_reflection_gate.py`).
+3. **Anti-contamination gate.** `vts/backtest/cutoff.py` + `model_cutoffs.json`: a decision dated on/before
+   the model's knowledge cutoff is flagged `contaminated` (참고용); segments are `clean` only if every date
+   is after the cutoff. Cutoff dates are **not fabricated** — the registry ships `null`/unverified, so
+   unknown models classify `unknown` (never guessed clean). User fills verified dates before trusting a
+   clean segment.
+4. **Determinism.** Fixed temperature (Step 1 config), an on-disk `DecisionCache` keyed by
+   `(ticker, date, model, prompt-hash, sample)`, and `N=3` majority-vote rating with a **dispersion**
+   metric (`vts/decision.py::aggregate_decisions`); ties break to Hold.
+5. **Cost model.** commission + sell-side tax + participation slippage (`impact = coef·√(notional/ADV)`,
+   capped). All coefficients documented, env/venue-overridable.
+
+Decision schema adopts TradingAgents' 5-tier `Rating` and **adds** `confidence` + structured `evidence`
+(the Trading-R1 gap). Metrics suite + benchmark-beat gate are Step 3; Step 2 emits equity curve, per-date
+records (weights/ratings/cost/turnover/dispersion/contamination) and per-fold OOS `SegmentReport`s.
+
+Tests: falsification (future ingestion cannot change engine ratings; model decision unaffected by future
+bars; reflection gate never resolves an unfinished window), plus cost monotonicity/participation, cutoff
+classification, cache determinism, walk-forward tiling, vote/dispersion.
+
 ## Step 3 — Evaluation (pending)
 ## Step 4 — Risk layer (pending)
 ## Step 5 — Paper trading (pending)
