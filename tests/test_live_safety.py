@@ -48,12 +48,12 @@ class _Buy:
                         rating=Rating.BUY, confidence=0.9)
 
 
-def _trader(store, broker, *, live_config, risk=None, audit=None):
+def _trader(store, broker, *, live_config, risk=None, audit=None, state_path=None):
     return LiveTrader(
         store, _Buy(),
         risk or RiskEngine(RiskLimits(max_weight_per_symbol=1.0, max_drawdown_limit=None)),
         broker, venue=US_EQUITY, live_config=live_config, cost_model=FREE,
-        config=BacktestConfig(n_samples=1), audit_path=audit,
+        config=BacktestConfig(n_samples=1), audit_path=audit, state_path=state_path,
     )
 
 
@@ -130,11 +130,13 @@ def test_liquidate_closes_longs_and_shorts_after_cancelling():
 
 def test_liquidate_dry_run_touches_nothing():
     broker = SimulatedBroker(positions={"A": 10.0}, prices={"A": 100.0}, open_orders=2)
-    report = liquidate_all(broker, reason="test")   # dry_run defaults True
+    report = liquidate_all(broker, reason="test", dry_run=True)
     assert report.dry_run is True
     assert broker.submitted == []                   # nothing sent
     assert len(broker.get_positions()) == 1         # still held
-    assert report.closed == {"A": 10.0}             # but reports what it would close
+    assert report.would_close == {"A": 10.0}        # a PLAN, kept distinct from `closed`
+    assert report.closed == {}
+    assert report.complete is False                 # a plan is never "complete"
 
 
 def test_liquidate_is_idempotent_on_flat_account():
@@ -145,10 +147,10 @@ def test_liquidate_is_idempotent_on_flat_account():
 
 def test_liquidate_continues_past_a_failing_symbol():
     class _Flaky(SimulatedBroker):
-        def submit_order(self, symbol, side, qty):
+        def submit_order(self, symbol, side, qty, *, limit_price):
             if symbol == "BAD":
                 raise RuntimeError("venue rejected")
-            return super().submit_order(symbol, side, qty)
+            return super().submit_order(symbol, side, qty, limit_price=limit_price)
 
     broker = _Flaky(positions={"BAD": 5.0, "GOOD": 7.0},
                     prices={"BAD": 10.0, "GOOD": 20.0})
@@ -160,24 +162,32 @@ def test_liquidate_continues_past_a_failing_symbol():
 
 # --- LiveTrader: kill switch and halts ----------------------------------------
 def test_cycle_kill_switch_liquidates_and_refuses_to_trade(monkeypatch, tmp_path):
+    from vts.live import LiveState
+
     store = PointInTimeStore()
     date = _bar(store, "A", 2, 100.0)
     broker = SimulatedBroker(positions={"A": 10.0}, prices={"A": 100.0}, open_orders=1)
     monkeypatch.setenv(LIVE_ARM_ENV, LIVE_ARM_TOKEN)
     monkeypatch.setenv(KILL_SWITCH_ENV, "1")
+    # Liquidation is sleeve-scoped, so the ledger must show the position as ours.
+    sp = tmp_path / "live.json"
+    LiveState(sleeve_positions={"A": 10.0}).save(sp)
     trader = _trader(store, broker,
                      live_config=LiveConfig(allocated_capital=1_000.0, dry_run=False),
-                     audit=tmp_path / "audit.log")
+                     audit=tmp_path / "audit.log", state_path=sp)
     result = trader.run_cycle(["A"], date)
     assert result.halted is True
     assert result.liquidation is not None and result.liquidation.closed == {"A": 10.0}
+    assert result.liquidation.complete is True      # verified flat, not assumed
     assert result.submitted == []                   # no strategy orders under the switch
     assert broker.get_positions() == []             # actually flat
-    lines = (tmp_path / "audit.log").read_text().strip().splitlines()
-    assert len(lines) == 1 and lines[0].split()[1] == "KILL_SWITCH"
+    audit = (tmp_path / "audit.log").read_text()
+    assert "LIQUIDATE_INTENT" in audit and "LIQUIDATE_RESULT" in audit
 
 
-def test_cycle_latched_risk_halt_liquidates(monkeypatch):
+def test_cycle_latched_risk_halt_liquidates(monkeypatch, tmp_path):
+    from vts.live import LiveState
+
     store = PointInTimeStore()
     date = _bar(store, "A", 2, 100.0)
     broker = SimulatedBroker(positions={"A": 10.0}, prices={"A": 100.0})
@@ -185,9 +195,11 @@ def test_cycle_latched_risk_halt_liquidates(monkeypatch):
     monkeypatch.delenv(KILL_SWITCH_ENV, raising=False)
     risk = RiskEngine(RiskLimits(daily_loss_limit=0.03, max_drawdown_limit=None))
     risk.observe_daily_return(-0.5)                 # latch the daily-loss halt
+    sp = tmp_path / "live.json"
+    LiveState(sleeve_positions={"A": 10.0}).save(sp)
     trader = _trader(store, broker,
                      live_config=LiveConfig(allocated_capital=1_000.0, dry_run=False),
-                     risk=risk)
+                     risk=risk, state_path=sp)
     result = trader.run_cycle(["A"], date)
     assert result.halted is True
     assert broker.get_positions() == []

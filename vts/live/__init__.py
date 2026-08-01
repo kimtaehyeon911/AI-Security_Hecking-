@@ -37,6 +37,7 @@ from vts.live.config import (
     live_trading_armed,
 )
 from vts.live.liquidate import LiquidationReport, liquidate_all
+from vts.live.state import LiveState
 from vts.live.trader import LiveTrader
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "LiquidationReport",
     "LiveConfig",
     "LiveNotArmed",
+    "LiveState",
     "LiveTrader",
     "MAX_INITIAL_CAPITAL_FRACTION",
     "Position",

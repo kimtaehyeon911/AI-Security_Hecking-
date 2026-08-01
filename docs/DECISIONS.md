@@ -249,5 +249,28 @@ Tests: 180 passing — cap boundary/no-env-override, three-condition arming, can
 short-closed-by-buy, dry-run touches nothing, armed routing sized to allocation, per-cycle cap
 enforcement, circuit breaker.
 
+Adversarial review round 6 (arming-bypass / liquidation / routing): **18 confirmed, 0 unsure, all
+fixed** — the most serious round, as befits the money layer. Four were critical:
+- **CRITICAL: NaN `total_assets` silently removed the 1% cap.** `allocated > nan` is False, so a
+  reviewer's end-to-end repro deployed 50% of a $1M account. Fixed: finiteness checked first, cap test
+  written `not (allocated <= cap)` (fails closed), and `allow_inf_nan=False` on every money field
+  (pydantic's `gt=0` alone accepts `inf`).
+- **CRITICAL: `liquidate_all` never verified flat** — `complete=True` came from "no exception raised",
+  so rejections and partial fills read as success. Now re-fetches positions, reports `residual`, treats
+  a rejected-status order as failure, and `complete` is observed-flatness (a dry run is never complete).
+- **CRITICAL: the limit price was discarded** — orders validated as limits were sent unpriced (market)
+  with unbounded slippage. `submit_order` now takes a required `limit_price`.
+- **CRITICAL: no open-order awareness** — an unfilled order was re-sent every cycle, multiplying
+  exposure. `get_open_orders` added to the contract and netted into holdings.
+- HIGH: the stray-position loop would have sold the operator's entire pre-existing book. A durable
+  **sleeve ledger** now scopes both trading and liquidation to what this system actually bought — and a
+  regression test caught that `sleeve_symbols() or None` turned an *empty* sleeve into "liquidate
+  everything", the exact catastrophe the fix targeted.
+- HIGH: process-local halt latch → durable `LiveState` (atomic write); a restart with the kill switch
+  cleared no longer resumes trading. Unarmed emergency liquidation now reports-only unless
+  `allow_unarmed_liquidation` is set. Cancel failure no longer aborts the closes. Aggregate buy notional
+  is capped at the allocation. Buys are validated against genuinely-available cash, never unconfirmed
+  sell proceeds. A mid-batch submit error returns the partial result instead of losing the record.
+
 **Not done (deliberately, needs your explicit go-ahead):** a real broker adapter, live credentials, and
 a first real order. The 8-week paper run (Step 5) should complete and pass the Step 3 gate first.

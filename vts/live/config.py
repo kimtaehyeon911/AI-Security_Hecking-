@@ -15,10 +15,15 @@ Arming uses an exact string token rather than a boolean because a stray
 
 from __future__ import annotations
 
+import math
 import os
-from typing import Final
+from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field
+
+#: Money fields must never accept nan/inf: a single non-finite value turns every
+#: ``x > limit`` comparison into False and silently removes the limit.
+FiniteMoney = Annotated[float, Field(allow_inf_nan=False)]
 
 #: Hardcoded ceiling: initial live capital may not exceed this fraction of total
 #: assets. Deliberately a module constant — no env var, no config field, no
@@ -47,9 +52,17 @@ def live_trading_armed(env: dict[str, str] | None = None) -> bool:
 def assert_capital_within_cap(allocated_capital: float, total_assets: float) -> None:
     """Raise :class:`CapitalCapExceeded` unless allocation is within the hard cap.
 
-    Non-positive total assets can never satisfy the cap — refuse rather than
-    divide-by-zero into a permissive answer.
+    Fails CLOSED on every degenerate input. ``total_assets`` is untrusted broker
+    output, so finiteness is checked FIRST: with ``nan`` the expression
+    ``allocated > nan`` is False for every value, which would silently pass a
+    50x-over-cap allocation. The final test is written ``not (allocated <= cap)``
+    so any NaN reintroduced later fails rather than slips through.
     """
+    if not math.isfinite(allocated_capital) or not math.isfinite(total_assets):
+        raise CapitalCapExceeded(
+            f"non-finite capital inputs: allocated={allocated_capital!r}, "
+            f"total_assets={total_assets!r}"
+        )
     if allocated_capital <= 0:
         raise CapitalCapExceeded(f"allocated capital must be positive, got {allocated_capital}")
     if total_assets <= 0:
@@ -57,7 +70,7 @@ def assert_capital_within_cap(allocated_capital: float, total_assets: float) -> 
             f"total assets must be positive to size an allocation, got {total_assets}"
         )
     cap = total_assets * MAX_INITIAL_CAPITAL_FRACTION
-    if allocated_capital > cap:
+    if not (allocated_capital <= cap):  # NaN-safe: fails closed
         raise CapitalCapExceeded(
             f"allocated capital {allocated_capital:,.2f} exceeds the hardcoded cap "
             f"{cap:,.2f} ({MAX_INITIAL_CAPITAL_FRACTION:.1%} of total assets "
@@ -70,11 +83,12 @@ class LiveConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    allocated_capital: float = Field(
+    allocated_capital: FiniteMoney = Field(
         gt=0.0,
         description=(
             "Capital this session may deploy. Checked against the hardcoded "
-            "≤1%-of-total-assets cap at arm time and before every session."
+            "≤1%-of-total-assets cap at arm time and before every session. "
+            "allow_inf_nan=False: pydantic's gt=0 alone would accept inf."
         ),
     )
     dry_run: bool = Field(
@@ -84,6 +98,16 @@ class LiveConfig(BaseModel):
     max_orders_per_session: int = Field(
         default=20, ge=1,
         description="Circuit breaker on runaway order generation in one session.",
+    )
+    allow_unarmed_liquidation: bool = Field(
+        default=False,
+        description=(
+            "Whether an emergency liquidation may run without the arming token. "
+            "False (default) means an unarmed process only REPORTS the liquidation "
+            "it would perform — safe, but it does not actually flatten. Operators "
+            "running a live sleeve should set this True so the kill switch can act "
+            "even if the arming token was cleared first."
+        ),
     )
 
     def assert_armed_for_live(self, total_assets: float, env: dict[str, str] | None = None) -> None:
