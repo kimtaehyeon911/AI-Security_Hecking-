@@ -221,4 +221,33 @@ Adversarial review round 5 (parity / state-resume / shortfall-accounting): **13 
   now sells-first. Halt rehydration no longer silently un-latches a passed-in halted engine (raises).
 - LOW: `math.floor` share sizing over-shorted for negative weights → `int()` toward zero; run() must get
   the full window (documented) so the reference stays anchored across a resume.
-## Step 6 — Live (pending, explicit approval only)
+## Step 6 — Live (safety envelope done, pending approval; NOT connected to a real broker)
+`vts/live/` — the guarded live path. **Scope decision:** this session has no broker credentials, and
+shipping untested money-moving HTTP code is precisely the wrong convenience at this step. So the full
+safety envelope is implemented and tested, while `BrokerClient` remains an interface — a real adapter
+(Alpaca / KIS / 키움 / Binance) needs its own review and a paper-endpoint smoke test before any
+production key exists.
+
+Key decisions:
+1. **Hardcoded 1% cap.** `MAX_INITIAL_CAPITAL_FRACTION: Final = 0.01` is a module constant with no env
+   override and no config field — raising it requires a reviewed code change. Re-checked against the
+   broker's reported total assets on **every cycle**, not just at startup, and in dry run too.
+2. **Dry run defaults True** on every model/constructor. Live routing needs all three of: explicit
+   `dry_run=False`, `VTS_LIVE_TRADING_ARMED` set to the exact token `I_UNDERSTAND_THE_RISK` (a boolean
+   would be too easy to set accidentally), and the capital cap satisfied. Arming is re-checked per order
+   so disarming mid-batch stops routing.
+3. **Kill switch = 전량 청산.** `VTS_KILL_SWITCH` triggers `liquidate_all`: cancel open orders **first**
+   (a resting buy must not fill behind the liquidator), then close every position — a short is closed by
+   buying — then latch. Idempotent, retryable, and one failing symbol never strands the rest. A latched
+   daily-loss/drawdown halt liquidates the same way.
+4. **Same decision pipeline** as backtest/paper (`sample_decisions` → `RiskEngine.apply` →
+   `validate_order`); orders are sized against **allocated capital**, never the whole account, with
+   sells sequenced first and an order-count circuit breaker.
+5. Append-only audit log of every liquidation, rejection, and sent order.
+
+Tests: 180 passing — cap boundary/no-env-override, three-condition arming, cancel-before-close ordering,
+short-closed-by-buy, dry-run touches nothing, armed routing sized to allocation, per-cycle cap
+enforcement, circuit breaker.
+
+**Not done (deliberately, needs your explicit go-ahead):** a real broker adapter, live credentials, and
+a first real order. The 8-week paper run (Step 5) should complete and pass the Step 3 gate first.
