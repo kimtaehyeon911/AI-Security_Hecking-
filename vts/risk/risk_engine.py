@@ -38,12 +38,19 @@ class RiskEngine:
     def __init__(self, limits: RiskLimits | None = None, *, long_only: bool = True) -> None:
         self.limits = limits or RiskLimits()
         self.long_only = long_only
-        self.halt = HaltState(daily_loss_limit=self.limits.daily_loss_limit)
+        self.halt = HaltState(
+            daily_loss_limit=self.limits.daily_loss_limit,
+            max_drawdown_limit=self.limits.max_drawdown_limit,
+        )
 
     # ------------------------------------------------------------------ inputs
-    def observe_period_return(self, period_return: float) -> bool:
-        """Feed the latest mark-to-market period return; returns halted state."""
-        return self.halt.observe_period_return(period_return)
+    def observe_daily_return(self, daily_return: float) -> bool:
+        """Feed one SINGLE-DAY mark-to-market return; returns halted state."""
+        return self.halt.observe_daily_return(daily_return)
+
+    def observe_equity(self, equity: float) -> bool:
+        """Feed running equity for the cumulative drawdown-from-peak stop."""
+        return self.halt.observe_equity(equity)
 
     # ------------------------------------------------------------------- apply
     def apply(self, aggs: dict[str, AggregatedDecision]) -> RiskVerdict:

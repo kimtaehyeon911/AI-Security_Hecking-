@@ -69,6 +69,15 @@ class BacktestResult:
     llm_calls: int = 0
     llm_cache_hits: int = 0
     llm_cost_usd: float = 0.0
+    # Whether the deterministic risk layer was applied. False means the naive
+    # research-only sizing path ran — an un-gated run, surfaced so it is never
+    # mistaken for a risk-clean one.
+    risk_enabled: bool = False
+
+    @property
+    def any_halt(self) -> bool:
+        """Whether the risk layer halted on any date of this run."""
+        return any(r.halted for r in self.records)
 
     @property
     def equity_curve(self) -> list[tuple[datetime, float]]:
@@ -156,6 +165,58 @@ def _dollar_adv(store: PointInTimeStore, ticker: str, clock: AsOfClock, lookback
     return sum(b.close * b.volume for b in window) / len(window)
 
 
+def _interval_daily_returns(
+    store: PointInTimeStore,
+    weights: dict[str, float],
+    prev_date: datetime,
+    d: datetime,
+) -> list[float]:
+    """Daily portfolio returns over ``(prev_date, d]`` holding ``weights``.
+
+    Feeds the daily-loss halt genuine SINGLE-DAY marks regardless of rebalance
+    cadence, so a one-day crash inside a weekly interval is still caught. Weights
+    are held fixed across the interval (drift within a few bars is immaterial to a
+    single-day breach check); closes are forward-filled onto the union date axis
+    so misaligned per-ticker calendars still align. Read as-of ``d`` — no
+    look-ahead (every bar has ``knowledge_time <= d``).
+    """
+    held = {t: w for t, w in weights.items() if w != 0.0}
+    if not held:
+        return []
+    clock = AsOfClock.at(d)
+    per: dict[str, dict[datetime, float]] = {}
+    axis: set[datetime] = set()
+    for t in held:
+        bars = store.get_ohlcv(t, clock, start=prev_date, end=d)
+        per[t] = {b.event_time: b.close for b in bars}
+        axis.update(per[t])
+    ordered = sorted(axis)
+    if len(ordered) < 2:
+        return []
+    # Forward-fill each ticker along the shared axis.
+    filled: dict[str, dict[datetime, float]] = {}
+    for t in held:
+        last: float | None = None
+        row: dict[datetime, float] = {}
+        for dt in ordered:
+            if dt in per[t]:
+                last = per[t][dt]
+            row[dt] = last
+        filled[t] = row
+
+    returns: list[float] = []
+    for prev_dt, cur_dt in zip(ordered, ordered[1:]):
+        if cur_dt <= prev_date:
+            continue
+        r = 0.0
+        for t, w in held.items():
+            p0, p1 = filled[t].get(prev_dt), filled[t].get(cur_dt)
+            if p0 and p1 and p0 > 0:
+                r += w * (p1 / p0 - 1.0)
+        returns.append(r)
+    return returns
+
+
 def _target_weights(
     ratings: dict[str, object], long_only: bool, max_gross: float
 ) -> dict[str, float]:
@@ -197,7 +258,26 @@ class Backtester:
 
     def run(self, universe: list[str], decision_dates: list[datetime]) -> BacktestResult:
         cfg = self.config
-        result = BacktestResult(config=cfg, model_id=self.model.model_id)
+        result = BacktestResult(config=cfg, model_id=self.model.model_id,
+                                risk_enabled=self.risk is not None)
+
+        if self.risk is not None:
+            # A stale halt latch from a prior run would silently flatten this one.
+            if self.risk.halt.halted:
+                raise RuntimeError(
+                    "RiskEngine is already halted from a prior run — construct a "
+                    "fresh RiskEngine per run, or call halt.reset(operator=...) "
+                    "after auditing the prior halt."
+                )
+            # A kill switch left engaged would silently produce a flat backtest;
+            # in a simulation that is corrupted data, so fail loud instead.
+            from vts.risk.killswitch import kill_switch_active
+
+            if kill_switch_active():
+                raise RuntimeError(
+                    "VTS_KILL_SWITCH is engaged; refusing to run a backtest that "
+                    "would be silently flat. Clear it for simulation."
+                )
 
         # Snapshot the tracker so this run's LLM accounting is a clean delta even
         # when the Backtester (and its tracker) is reused across multiple runs.
@@ -242,7 +322,12 @@ class Backtester:
                     r += cash_frac * ((1.0 + cfg.rf_annual) ** dt_years - 1.0)
                 equity *= 1.0 + r
                 if self.risk is not None:
-                    self.risk.observe_period_return(r)  # daily-loss latch input
+                    # Feed genuine single-day marks (not the whole-period return) so
+                    # the "daily" loss limit is truly daily at any cadence; then feed
+                    # running equity for the cumulative drawdown stop.
+                    for dr in _interval_daily_returns(self.store, weights, prev_date, d):
+                        self.risk.observe_daily_return(dr)
+                    self.risk.observe_equity(equity)
                 denom = 1.0 + r
                 if denom > 0:
                     weights = {

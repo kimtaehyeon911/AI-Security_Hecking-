@@ -90,3 +90,48 @@ def test_engine_without_risk_layer_unchanged():
     result = bt.run(["A"], dates)
     assert result.records[0].weights["A"] == pytest.approx(1.0)
     assert result.records[0].halted is False
+    assert result.risk_enabled is False       # un-gated run is surfaced, not hidden
+
+
+def test_single_day_crash_caught_under_weekly_cadence():
+    """DAILY marks are fed even when rebalancing weekly: a one-day -5% mid-week halts."""
+    store = PointInTimeStore()
+    # Weekly decisions on day 2 and day 9, but DAILY bars exist in between.
+    # Day 5 drops -5% intraday-to-close then recovers by day 9 -> week net small.
+    closes = {2: 100, 3: 100, 4: 100, 5: 95, 6: 97, 7: 99, 8: 100, 9: 100}
+    for day, c in closes.items():
+        store.append(_bar("A", day, c))
+    dates = [utc(2024, 1, 2, 21), utc(2024, 1, 9, 21)]  # weekly cadence
+    risk = RiskEngine(RiskLimits(daily_loss_limit=0.03, max_weight_per_symbol=1.0,
+                                 max_drawdown_limit=None))
+    bt = Backtester(store, _Buy(), cost_model=FREE,
+                    config=BacktestConfig(n_samples=1), risk=risk)
+    result = bt.run(["A"], dates)
+    # The week's net return is ~0, but the day-4->5 single-day -5% breaches the halt.
+    assert result.records[1].halted is True
+
+
+def test_stale_halt_latch_raises_on_reuse():
+    store = PointInTimeStore()
+    for day, close in [(2, 100), (9, 50)]:  # -50% crash latches
+        store.append(_bar("A", day, close))
+    dates = [utc(2024, 1, d, 21) for d in (2, 9)]
+    risk = RiskEngine(RiskLimits(daily_loss_limit=0.03, max_weight_per_symbol=1.0))
+    bt = Backtester(store, _Buy(), cost_model=FREE,
+                    config=BacktestConfig(n_samples=1), risk=risk)
+    bt.run(["A"], dates)
+    assert risk.halt.halted is True
+    with pytest.raises(RuntimeError, match="already halted"):
+        bt.run(["A"], dates)               # reused engine still latched -> loud error
+
+
+def test_backtest_refuses_to_run_under_engaged_kill_switch(monkeypatch):
+    from vts.risk.killswitch import KILL_SWITCH_ENV
+    monkeypatch.setenv(KILL_SWITCH_ENV, "1")
+    store = PointInTimeStore()
+    store.append_many([_bar("A", 2, 100), _bar("A", 9, 110)])
+    dates = [utc(2024, 1, d, 21) for d in (2, 9)]
+    bt = Backtester(store, _Buy(), cost_model=FREE,
+                    config=BacktestConfig(n_samples=1), risk=RiskEngine(RiskLimits()))
+    with pytest.raises(RuntimeError, match="KILL_SWITCH"):
+        bt.run(["A"], dates)               # no silent flat backtest

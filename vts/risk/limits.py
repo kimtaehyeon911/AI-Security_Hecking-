@@ -32,8 +32,16 @@ class RiskLimits(BaseModel):
     daily_loss_limit: float = Field(
         default=0.03, gt=0.0, le=1.0,
         description=(
-            "일일 손실 한도 — a mark-to-market loss of this fraction since the "
-            "previous decision point halts trading (targets go flat, latched)."
+            "일일 손실 한도 — a SINGLE-DAY mark-to-market loss of this fraction halts "
+            "trading (targets go flat, latched). Fed genuine daily marks by the "
+            "engine, so it is a true daily bound at any rebalance cadence."
+        ),
+    )
+    max_drawdown_limit: float | None = Field(
+        default=0.20, gt=0.0, le=1.0,
+        description=(
+            "Cumulative peak-to-current drawdown that latches the halt — catches "
+            "slow bleeds that never breach the per-day limit. None disables it."
         ),
     )
     min_confidence: float = Field(
@@ -48,6 +56,14 @@ class RiskLimits(BaseModel):
         default=1.5, ge=0.0,
         description="Above this ordinal rating dispersion the decision is forced to Hold.",
     )
+    hold_on_single_sample: bool = Field(
+        default=False,
+        description=(
+            "When True, a single-sample decision (N=1) is forced to Hold because "
+            "agreement/dispersion cannot be assessed. Off by default so "
+            "deterministic N=1 research runs are not neutered."
+        ),
+    )
 
     @classmethod
     def from_env(cls) -> RiskLimits:
@@ -58,12 +74,13 @@ class RiskLimits(BaseModel):
             "VTS_RISK_MAX_WEIGHT": "max_weight_per_symbol",
             "VTS_RISK_MAX_GROSS": "max_gross_exposure",
             "VTS_RISK_DAILY_LOSS_LIMIT": "daily_loss_limit",
+            "VTS_RISK_MAX_DRAWDOWN": "max_drawdown_limit",
             "VTS_RISK_MIN_CONFIDENCE": "min_confidence",
             "VTS_RISK_MIN_AGREEMENT": "min_agreement",
             "VTS_RISK_MAX_DISPERSION": "max_dispersion",
         }
         for var, field in mapping.items():
-            if env.get(var):
+            if env.get(var) is not None and env[var].strip() != "":
                 try:
                     raw[field] = float(env[var])
                 except ValueError as exc:
@@ -89,10 +106,14 @@ class VenueRules(BaseModel):
 
     @field_validator("tick_ladder")
     @classmethod
-    def _ladder_sorted_positive(cls, v):
+    def _ladder_strictly_increasing_positive(cls, v):
+        if not v:
+            raise ValueError("tick_ladder must be non-empty")
         bounds = [b for b, _ in v]
-        if not v or bounds != sorted(bounds):
-            raise ValueError("tick_ladder must be non-empty and sorted by upper bound")
+        # Strictly increasing: equal adjacent bounds would make the later row's
+        # tick unreachable (first-match wins), silently collapsing a price band.
+        if any(b2 <= b1 for b1, b2 in zip(bounds, bounds[1:])):
+            raise ValueError("tick_ladder bounds must be strictly increasing")
         if any(Decimal(t) <= 0 for _, t in v):
             raise ValueError("ticks must be positive")
         if bounds[-1] != float("inf"):

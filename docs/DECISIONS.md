@@ -155,7 +155,22 @@ Key decisions:
    호가단위 (Decimal tick check on price bands — KRX ladder shipped, US flat $0.01), 최소주문금액 + lot
    size. All violations collected, not just the first.
 5. **Engine integration**: `Backtester(risk=RiskEngine(...))` replaces naive sizing with
-   gate → per-symbol cap → gross cap → halt; every mark-to-market return feeds the daily-loss latch;
-   `DateRecord` records `halted` / `forced_holds`.
+   gate → per-symbol cap → gross cap → halt; `DateRecord` records `halted` / `forced_holds`.
+
+Adversarial review round 4 (bypass / halt-semantics / order-validation): **13 confirmed, all fixed**
+(`tests/test_risk_layer.py`, `test_risk_engine_integration.py`):
+- HIGH: the "daily" loss limit was actually per-decision-period → at non-daily cadence a real
+  single-day crash could be missed and multi-period bleed slip through. The engine now feeds the halt
+  **genuine daily marks** (iterates the PIT store's daily bars between decision dates, forward-filled,
+  as-of the clock so no look-ahead), plus a companion **cumulative drawdown-from-peak** stop
+  (`max_drawdown_limit`, default 20%).
+- Kill switch fail-open: any non-empty, non-explicitly-false value now engages (fail-safe); a backtest
+  refuses to run under an engaged `VTS_KILL_SWITCH` (no silently-flat sim); a stale halt latch from a
+  reused engine raises loudly; `BacktestResult.risk_enabled`/`any_halt` surface un-gated/halted runs.
+- Audit trail records distinct concurrent stop reasons (was dropped when already halted).
+- Single-sample (N=1) makes agreement/dispersion gates vacuous → opt-in `hold_on_single_sample`.
+- Orders: `AccountState` position keys normalized (lowercase broker keys no longer strand a sell);
+  tick ladder must be strictly increasing (a duplicate bound silently collapsed a price band);
+  fee-blind default cash check documented (live callers must pass a `cash_buffer`).
 ## Step 5 — Paper trading (pending)
 ## Step 6 — Live (pending, explicit approval only)

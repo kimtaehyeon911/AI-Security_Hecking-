@@ -58,6 +58,13 @@ def gate_decision(agg: AggregatedDecision, limits: RiskLimits) -> GatedDecision:
         reasons.append(f"high_dispersion: {agg.dispersion:.2f} > {limits.max_dispersion:.2f}")
     if agg.tie_broken_to_hold:
         reasons.append("vote_tie")
+    # A single sample makes agreement (always 1.0) and dispersion (always 0.0)
+    # vacuous, so those gates cannot fire. An operator who relies on them can set
+    # hold_on_single_sample so an un-assessable single-sample decision is a
+    # conservative Hold rather than a free pass. Off by default (deterministic
+    # research runs legitimately use n=1).
+    if limits.hold_on_single_sample and agg.n_samples < 2:
+        reasons.append(f"single_sample: n={agg.n_samples} cannot assess agreement/dispersion")
 
     forced = bool(reasons) and agg.rating != Rating.HOLD
     return GatedDecision(

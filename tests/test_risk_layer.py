@@ -92,22 +92,45 @@ def test_per_symbol_and_gross_clamps():
 # --- halt latch + kill switch --------------------------------------------------
 def test_daily_loss_halt_latches_at_threshold():
     h = HaltState(daily_loss_limit=0.03)
-    assert h.observe_period_return(-0.029) is False
-    assert h.observe_period_return(-0.03) is True   # exactly at the limit halts
-    assert h.observe_period_return(+0.10) is True   # latched: a good day does not unlatch
+    assert h.observe_daily_return(-0.029) is False
+    assert h.observe_daily_return(-0.03) is True   # exactly at the limit halts
+    assert h.observe_daily_return(+0.10) is True   # latched: a good day does not unlatch
 
 
 def test_halt_reset_requires_operator():
     h = HaltState(daily_loss_limit=0.03)
-    h.observe_period_return(-0.05)
+    h.observe_daily_return(-0.05)
     h.reset(operator="human@ops")
     assert h.halted is False
     assert any("reset by human@ops" in r for r in h.halt_reasons)
 
 
+def test_cumulative_drawdown_stop_catches_slow_bleed():
+    # Each day loses 2% (under the 3% daily limit) but the bleed compounds past 20%.
+    h = HaltState(daily_loss_limit=0.03, max_drawdown_limit=0.20)
+    eq = 100.0
+    h.observe_equity(eq)
+    for _ in range(15):
+        assert h.observe_daily_return(-0.02) is h.halted  # daily limit never fires
+        eq *= 0.98
+        h.observe_equity(eq)
+    assert h.halted is True                                # drawdown-from-peak breached
+    assert any("max_drawdown" in r for r in h.halt_reasons)
+    assert not any("daily_loss_limit" in r for r in h.halt_reasons)
+
+
+def test_audit_trail_records_distinct_concurrent_reasons(monkeypatch):
+    h = HaltState(daily_loss_limit=0.03)
+    h.observe_daily_return(-0.05)          # daily-loss latch
+    monkeypatch.setenv(KILL_SWITCH_ENV, "1")
+    h.check_kill_switch()                  # distinct reason recorded even while halted
+    assert any("daily_loss_limit" in r for r in h.halt_reasons)
+    assert any("kill_switch" in r for r in h.halt_reasons)
+
+
 def test_halted_engine_goes_flat():
     eng = RiskEngine(RiskLimits(daily_loss_limit=0.03))
-    eng.observe_period_return(-0.05)
+    eng.observe_daily_return(-0.05)
     verdict = eng.apply({"A": _agg(rating=Rating.BUY)})
     assert verdict.halted is True
     assert verdict.weights == {"A": 0.0}
@@ -121,6 +144,40 @@ def test_kill_switch_forces_flat(monkeypatch):
     assert verdict.halted is True and verdict.weights["A"] == 0.0
     monkeypatch.delenv(KILL_SWITCH_ENV)
     assert kill_switch_active() is False
+
+
+def test_kill_switch_fails_safe_on_unrecognized_values(monkeypatch):
+    # Any non-empty, non-explicitly-false value must engage (no silent fail-open).
+    for val in ("2", "STOP", "kill", "enabled", "ON"):
+        monkeypatch.setenv(KILL_SWITCH_ENV, val)
+        assert kill_switch_active() is True, f"{val!r} should engage the kill switch"
+    for val in ("", "0", "false", "no", "off", "disabled"):
+        monkeypatch.setenv(KILL_SWITCH_ENV, val)
+        assert kill_switch_active() is False, f"{val!r} should not engage"
+
+
+def test_single_sample_gate_opt_in():
+    from vts.risk.limits import RiskLimits as RL
+    strong_single = AggregatedDecision(
+        ticker="A", as_of="x", rating=Rating.BUY, n_samples=1, agreement=1.0,
+        dispersion=0.0, mean_confidence=0.9, votes={"Buy": 1}, tie_broken_to_hold=False,
+    )
+    assert gate_decision(strong_single, RL()).effective == Rating.BUY          # default off
+    g = gate_decision(strong_single, RL(hold_on_single_sample=True))
+    assert g.effective == Rating.HOLD and any("single_sample" in r for r in g.reasons)
+
+
+def test_duplicate_tick_ladder_bound_rejected():
+    with pytest.raises(ValidationError):
+        VenueRules(name="dup", tick_ladder=((2000.0, "1"), (2000.0, "5"), (float("inf"), "10")))
+
+
+def test_position_keys_normalized():
+    acct = AccountState(cash=0.0, positions={"aapl": 10.0, " brk.b ": 5.0})
+    assert acct.position("AAPL") == 10.0
+    assert acct.position("brk.b") == 5.0        # lowercase query works too
+    sell = Order(symbol="aapl", side="sell", qty=5, limit_price=100.0)
+    assert validate_order(sell, acct, US_EQUITY) is None  # no longer stranded
 
 
 # --- order validation ----------------------------------------------------------

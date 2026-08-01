@@ -11,7 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from vts.risk.limits import VenueRules
 
@@ -39,8 +39,24 @@ class AccountState(BaseModel):
     cash: float = Field(ge=0.0)
     positions: dict[str, float] = Field(default_factory=dict)  # symbol -> qty held
 
+    @field_validator("positions")
+    @classmethod
+    def _normalize_keys(cls, v: dict[str, float]) -> dict[str, float]:
+        """Upper-case position keys so lookup (also upper-cased) is symmetric.
+
+        Without this, a broker feed with lowercase keys ('brk.b') would strand
+        the position — ``position()`` upper-cases the query and would miss it.
+        """
+        out: dict[str, float] = {}
+        for k, qty in v.items():
+            key = k.strip().upper()
+            if key in out:
+                raise ValueError(f"duplicate position symbol after normalization: {key}")
+            out[key] = qty
+        return out
+
     def position(self, symbol: str) -> float:
-        return self.positions.get(symbol.upper(), 0.0)
+        return self.positions.get(symbol.strip().upper(), 0.0)
 
 
 class OrderRejection(BaseModel):
@@ -66,7 +82,11 @@ def validate_order(
 
     Checks (all mandated):
     - 잔고: buys must fit in ``cash - cash_buffer``; sells must not exceed the held
-      position (no naked shorts through this layer).
+      position (no naked shorts through this layer). NOTE: the default
+      ``cash_buffer=0.0`` is fee-blind — a buy may consume 100% of cash leaving
+      nothing for commission/slippage. Live/paper callers MUST pass a
+      ``cash_buffer`` covering estimated fees (e.g. from ``CostModel``) so a
+      certified order can actually settle.
     - 호가단위: the limit price must sit on the venue's tick for that price band.
     - 최소주문금액 / lot: notional >= venue.min_notional; qty a positive multiple
       of ``lot_size`` (and an integer when lot_size is 1 — fractional shares are
