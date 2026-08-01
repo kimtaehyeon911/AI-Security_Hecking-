@@ -9,7 +9,7 @@ stopped across a restart, not silently resume trading.
 
 from __future__ import annotations
 
-import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,9 +43,21 @@ class PaperState(BaseModel):
         )
 
     def mark_to_market(self, prices: dict[str, float]) -> float:
-        """Equity = cash + Σ shares·price. Positions without a price are held at 0
-        (unknown mark) — surfaced by the caller, never silently dropped elsewhere."""
-        holdings = sum(sh * prices.get(sym, 0.0) for sym, sh in self.positions.items())
+        """Equity = cash + Σ shares·price.
+
+        The caller MUST supply a price for every held symbol (the paper loop
+        forward-fills the last known close via ``_last_close`` for held names even
+        when they have left the active universe). A held symbol missing from
+        ``prices`` is a caller bug, not a zero mark — raise rather than silently
+        crater equity (which would false-trigger the loss halt)."""
+        holdings = 0.0
+        for sym, sh in self.positions.items():
+            if sym not in prices:
+                raise KeyError(
+                    f"no mark for held symbol {sym!r}; the caller must forward-fill "
+                    f"a price for every held position before marking to market"
+                )
+            holdings += sh * prices[sym]
         return self.cash + holdings
 
     def last_processed(self) -> str | None:
@@ -53,9 +65,20 @@ class PaperState(BaseModel):
 
     # --------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:
+        """Atomically persist: write a temp file, fsync, then os.replace.
+
+        A trading-state file is rewritten after every step; an in-place truncate
+        would leave a corrupt, unrecoverable file if the process dies mid-write.
+        The tmp+rename makes the on-disk file always either the old or the new
+        complete state, never a partial one."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(self.model_dump_json(indent=2))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, p)
 
     @classmethod
     def load(cls, path: str | Path) -> PaperState:

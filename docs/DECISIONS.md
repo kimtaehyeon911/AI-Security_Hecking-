@@ -197,5 +197,28 @@ Key decisions:
 
 Note: an 8-week real-time run cannot execute in this session; the loop is validated by an offline
 fast-forward over 44 daily bars (> 8 trading weeks) asserting daily shortfall logging, resume, and halt
-persistence. Tests: 155 passing.
+persistence.
+
+Adversarial review round 5 (parity / state-resume / shortfall-accounting): **13 confirmed, all fixed**
+(`tests/test_review_fixes_step5.py`). Highlights:
+- HIGH: `cumulative_shortfall` summed equity LEVELS → a standing gap was re-counted daily (monotonic
+  artifact). Redefined: `gap` = current total drift (backtest−paper), `daily_shortfall` = today's
+  increment; no running sum of levels.
+- HIGH: symbol-case asymmetry (broker upcased keys, loop read raw) → lowercase tickers re-bought from a
+  phantom zero base and marked to zero. Symbols canonicalized to upper at the boundary.
+- HIGH: a held name missing this step's price (left the universe / zero close) was marked to 0, false-
+  latching the halt and stranding an unsellable position. Marks forward-fill every held name;
+  `mark_to_market` raises on an unmarked holding; out-of-universe holdings are liquidated.
+- HIGH: `save()` was a non-atomic in-place truncate → a crash mid-write corrupted the sole state file.
+  Now tmp-write + fsync + `os.replace`.
+- MED: the daily-loss halt got one per-step return instead of genuine daily marks (parity gap with the
+  backtest at non-daily cadence) → now feeds the same `_interval_daily_returns` decomposition.
+- MED: shortfall compared a pre-cost backtest mark to a post-cost paper mark → reference is now
+  post-cost (`r.equity − r.cost`), so an identically-trading book reports ~0 gap.
+- MED: reference-vs-paper halt divergence was silently booked as shortfall → `ShortfallRecord` now
+  carries `paper_halted`/`reference_halted`.
+- MED: no sell-before-buy sequencing → rotations could reject buys a pending sell would fund; orders are
+  now sells-first. Halt rehydration no longer silently un-latches a passed-in halted engine (raises).
+- LOW: `math.floor` share sizing over-shorted for negative weights → `int()` toward zero; run() must get
+  the full window (documented) so the reference stays anchored across a resume.
 ## Step 6 — Live (pending, explicit approval only)

@@ -81,7 +81,8 @@ def test_eight_week_run_logs_shortfall_daily(tmp_path):
     assert len(state.shortfall_log) == 44
     # Every day has an implementation-shortfall observation vs the reference backtest.
     assert all(r["backtest_equity"] is not None for r in state.shortfall_log)
-    assert all(r["shortfall"] is not None for r in state.shortfall_log)
+    assert all(r["gap"] is not None for r in state.shortfall_log)
+    assert all(r["daily_shortfall"] is not None for r in state.shortfall_log)
     # Paper actually traded (long the uptrend).
     assert state.positions
     assert state.equity_curve[-1][1] > 100_000  # made money gross
