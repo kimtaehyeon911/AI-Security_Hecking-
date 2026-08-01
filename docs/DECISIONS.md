@@ -172,5 +172,30 @@ Adversarial review round 4 (bypass / halt-semantics / order-validation): **13 co
 - Orders: `AccountState` position keys normalized (lowercase broker keys no longer strand a sell);
   tick ladder must be strictly increasing (a duplicate bound silently collapsed a price band);
   fee-blind default cash check documented (live callers must pass a `cash_buffer`).
-## Step 5 — Paper trading (pending)
+## Step 5 — Paper trading (done, pending approval)
+`vts/paper/` — a forward-running loop on a live clock that reuses the Step 2–4 components verbatim
+(`sample_decisions` → `RiskEngine.apply` → `validate_order`); the only thing added over the backtest is
+that target weights become concrete integer-share orders passing real pre-trade validation and filling
+through a simulated broker.
+
+Key decisions:
+1. **Same code path.** The loop calls the exact backtest/risk functions; the weight→order translation +
+   broker is the paper-specific delta, and is precisely where implementation shortfall arises.
+2. **Dry-run default True** (`PaperState`, `PaperBroker`, `PaperTrader`). `PaperBroker(dry_run=False)`
+   raises `LiveTradingNotEnabled` — real routing is Step 6. Resuming a run with a different dry_run flag
+   than persisted raises rather than silently switching.
+3. **Persistent, resumable state** (`state.py`): cash, share positions, equity curve, decision log,
+   shortfall log, processed dates, AND the halt latch are serialized after every step, so an 8-week run
+   survives per-day process restarts and a halted run stays halted across a restart. `step()` is
+   idempotent on already-processed dates.
+4. **Daily implementation shortfall** (`shortfall.py`): `shortfall = backtest_equity − paper_equity`
+   (positive = paper underperformed the model) logged every day vs a deterministic reference backtest
+   over the same window; per-day and cumulative, in bps of capital.
+5. **Live-path risk semantics**: one step = one trading day (일봉 cadence), so each step's return feeds
+   the daily-loss halt directly; the kill switch FLATTENS the paper book (the intended live behavior),
+   unlike the backtest which raises. Under an engaged kill switch the reference backtest is skipped.
+
+Note: an 8-week real-time run cannot execute in this session; the loop is validated by an offline
+fast-forward over 44 daily bars (> 8 trading weeks) asserting daily shortfall logging, resume, and halt
+persistence. Tests: 155 passing.
 ## Step 6 — Live (pending, explicit approval only)
