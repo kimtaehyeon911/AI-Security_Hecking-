@@ -138,6 +138,24 @@ all fixed** with regressions (`tests/test_review_fixes_step3.py`). Highlights:
 - Robustness: schema-valid zero-close bars excluded from share division (engine + benchmarks); budget
   check normalized to a monthly run-rate; tracker pickle/deepcopy-safe.
 
-## Step 4 — Risk layer (pending)
+## Step 4 — Risk layer (done, pending approval)
+`vts/risk/` — deterministic code between agent output and any execution; the same `RiskEngine` object
+serves backtest / paper / live so the risk path is identical everywhere.
+
+Key decisions:
+1. **Limits are frozen constants** (`limits.py::RiskLimits`, `extra="forbid"`), loaded from code
+   defaults or `VTS_RISK_*` env vars at startup only. No constructor path accepts agent output — the
+   금지사항 ("리스크 한도를 LLM이 결정하게 만드는 설계") is enforced structurally, not by convention.
+2. **Decision gate** (`gates.py`): low confidence / low vote agreement / high dispersion / vote tie →
+   forced Hold with an audit-trail reason; unparseable agent output → `hold_fallback` (same Hold path).
+3. **Halt latch** (`killswitch.py::HaltState`): a period loss ≤ -`daily_loss_limit` latches the halt —
+   targets flat, and a good day does NOT unlatch; reset requires an explicit named operator. Env kill
+   switch `VTS_KILL_SWITCH` (Step 6 groundwork) is checked fresh on every apply and also latches.
+4. **Order pre-validation** (`orders.py`): 잔고 (cash for buys / position for sells, no naked shorts),
+   호가단위 (Decimal tick check on price bands — KRX ladder shipped, US flat $0.01), 최소주문금액 + lot
+   size. All violations collected, not just the first.
+5. **Engine integration**: `Backtester(risk=RiskEngine(...))` replaces naive sizing with
+   gate → per-symbol cap → gross cap → halt; every mark-to-market return feeds the daily-loss latch;
+   `DateRecord` records `halted` / `forced_holds`.
 ## Step 5 — Paper trading (pending)
 ## Step 6 — Live (pending, explicit approval only)

@@ -1,0 +1,126 @@
+"""Risk limits and venue rules — frozen configuration, never model output.
+
+Both models are ``frozen`` pydantic models with ``extra="forbid"``: once
+constructed at startup they cannot be mutated, and unknown fields (e.g. an agent
+"suggesting" a new limit key) are rejected at validation. The only legitimate
+sources of these values are code defaults and ``VTS_RISK_*`` environment
+variables — there is deliberately NO constructor path that accepts agent/LLM
+output, and the risk engine takes limits at __init__ time only.
+"""
+
+from __future__ import annotations
+
+import os
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class RiskLimits(BaseModel):
+    """Hard limits applied to every decision batch. All fractions of equity."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_weight_per_symbol: float = Field(
+        default=0.20, gt=0.0, le=1.0,
+        description="종목당 최대 비중 — per-symbol weight ceiling.",
+    )
+    max_gross_exposure: float = Field(
+        default=1.0, gt=0.0, le=2.0,
+        description="총 노출 한도 — ceiling on sum(|weights|). 1.0 = unlevered.",
+    )
+    daily_loss_limit: float = Field(
+        default=0.03, gt=0.0, le=1.0,
+        description=(
+            "일일 손실 한도 — a mark-to-market loss of this fraction since the "
+            "previous decision point halts trading (targets go flat, latched)."
+        ),
+    )
+    min_confidence: float = Field(
+        default=0.30, ge=0.0, le=1.0,
+        description="Below this mean confidence the decision is forced to Hold.",
+    )
+    min_agreement: float = Field(
+        default=0.50, ge=0.0, le=1.0,
+        description="Below this vote agreement the decision is forced to Hold.",
+    )
+    max_dispersion: float = Field(
+        default=1.5, ge=0.0,
+        description="Above this ordinal rating dispersion the decision is forced to Hold.",
+    )
+
+    @classmethod
+    def from_env(cls) -> RiskLimits:
+        """Load limits from ``VTS_RISK_*`` env vars over the code defaults."""
+        env = os.environ
+        raw: dict[str, float] = {}
+        mapping = {
+            "VTS_RISK_MAX_WEIGHT": "max_weight_per_symbol",
+            "VTS_RISK_MAX_GROSS": "max_gross_exposure",
+            "VTS_RISK_DAILY_LOSS_LIMIT": "daily_loss_limit",
+            "VTS_RISK_MIN_CONFIDENCE": "min_confidence",
+            "VTS_RISK_MIN_AGREEMENT": "min_agreement",
+            "VTS_RISK_MAX_DISPERSION": "max_dispersion",
+        }
+        for var, field in mapping.items():
+            if env.get(var):
+                try:
+                    raw[field] = float(env[var])
+                except ValueError as exc:
+                    raise ValueError(f"invalid numeric value for {var}: {env[var]!r}") from exc
+        return cls(**raw)
+
+
+class VenueRules(BaseModel):
+    """Order-validation rules for one venue (tick size, lot size, min notional).
+
+    ``tick_ladder`` is a list of ``(upper_bound_exclusive, tick)`` rows sorted by
+    bound; the tick for a price is the first row whose bound exceeds it (KRX-style
+    price-banded ticks; a flat-tick venue like US equities uses one row).
+    Values are strings converted to Decimal so tick arithmetic is exact.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = "us_equity"
+    tick_ladder: tuple[tuple[float, str], ...] = ((float("inf"), "0.01"),)
+    lot_size: int = Field(default=1, ge=1)
+    min_notional: float = Field(default=1.0, ge=0.0)
+
+    @field_validator("tick_ladder")
+    @classmethod
+    def _ladder_sorted_positive(cls, v):
+        bounds = [b for b, _ in v]
+        if not v or bounds != sorted(bounds):
+            raise ValueError("tick_ladder must be non-empty and sorted by upper bound")
+        if any(Decimal(t) <= 0 for _, t in v):
+            raise ValueError("ticks must be positive")
+        if bounds[-1] != float("inf"):
+            raise ValueError("last ladder row must have an infinite upper bound")
+        return v
+
+    def tick_for(self, price: float) -> Decimal:
+        for bound, tick in self.tick_ladder:
+            if price < bound:
+                return Decimal(tick)
+        return Decimal(self.tick_ladder[-1][1])  # pragma: no cover - inf bound guards
+
+
+# KRX price-band tick ladder (KOSPI, 2023 revision) as a ready-made example for
+# the kr_equity asset class. Bounds in KRW.
+KRX_KOSPI = VenueRules(
+    name="krx_kospi",
+    tick_ladder=(
+        (2_000.0, "1"),
+        (5_000.0, "5"),
+        (20_000.0, "10"),
+        (50_000.0, "50"),
+        (200_000.0, "100"),
+        (500_000.0, "500"),
+        (float("inf"), "1000"),
+    ),
+    lot_size=1,
+    min_notional=0.0,
+)
+
+US_EQUITY = VenueRules(name="us_equity")

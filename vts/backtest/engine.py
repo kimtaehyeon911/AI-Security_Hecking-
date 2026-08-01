@@ -13,6 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from vts.risk.risk_engine import RiskEngine
 
 from vts.backtest.cache import DecisionCache, decision_key
 from vts.backtest.costs import CostModel
@@ -50,6 +54,8 @@ class DateRecord:
     mean_dispersion: float
     mean_agreement: float
     contamination: str
+    halted: bool = False
+    forced_holds: int = 0         # decisions the risk gate overrode to Hold this date
 
 
 @dataclass
@@ -175,6 +181,7 @@ class Backtester:
         cache: DecisionCache | None = None,
         config: BacktestConfig | None = None,
         llm_tracker: LLMCostTracker | None = None,
+        risk: "RiskEngine | None" = None,
     ) -> None:
         self.store = store
         self.model = model
@@ -183,6 +190,10 @@ class Backtester:
         self.cache = cache or DecisionCache()
         self.config = config or BacktestConfig()
         self.llm_tracker = llm_tracker or LLMCostTracker()
+        # Optional deterministic risk layer (vts.risk.RiskEngine). When present it
+        # replaces the naive rating->weight sizing: gate -> clamp -> halt, and the
+        # engine feeds it every mark-to-market return for the daily-loss latch.
+        self.risk = risk
 
     def run(self, universe: list[str], decision_dates: list[datetime]) -> BacktestResult:
         cfg = self.config
@@ -230,6 +241,8 @@ class Backtester:
                     dt_years = (d - prev_date).total_seconds() / (365.25 * 24 * 3600)
                     r += cash_frac * ((1.0 + cfg.rf_annual) ** dt_years - 1.0)
                 equity *= 1.0 + r
+                if self.risk is not None:
+                    self.risk.observe_period_return(r)  # daily-loss latch input
                 denom = 1.0 + r
                 if denom > 0:
                     weights = {
@@ -244,8 +257,16 @@ class Backtester:
                 )
                 for t in priced
             }
-            target = _target_weights(aggs, cfg.long_only, cfg.max_gross)
-            target = {t: target.get(t, 0.0) for t in universe}
+            halted = False
+            forced_holds = 0
+            if self.risk is not None:
+                verdict = self.risk.apply(aggs)
+                halted = verdict.halted
+                forced_holds = sum(1 for g in verdict.gated.values() if g.forced_hold)
+                target = {t: verdict.weights.get(t, 0.0) for t in universe}
+            else:
+                target = _target_weights(aggs, cfg.long_only, cfg.max_gross)
+                target = {t: target.get(t, 0.0) for t in universe}
 
             # 3) Charge turnover costs (drifted -> target) using ADV known at the clock.
             carried_in = equity
@@ -301,6 +322,8 @@ class Backtester:
                     mean_dispersion=sum(disp) / len(disp) if disp else 0.0,
                     mean_agreement=sum(agr) / len(agr) if agr else 0.0,
                     contamination=contamination,
+                    halted=halted,
+                    forced_holds=forced_holds,
                 )
             )
             result.benchmark_curve.append((d, bench_equity))
