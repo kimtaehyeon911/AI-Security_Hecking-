@@ -32,6 +32,10 @@ class LiveState(BaseModel):
         default=False,
         description="True once a liquidation was verified complete; stops re-liquidating.",
     )
+    dust_symbols: list[str] = Field(
+        default_factory=list,
+        description="Sleeve positions too small to exit (sub-lot / sub-min-notional), noted once.",
+    )
 
     def sleeve_symbols(self) -> set[str]:
         return {s for s, q in self.sleeve_positions.items() if q != 0.0}

@@ -34,6 +34,9 @@ class PaperState(BaseModel):
     halted: bool = False
     halt_reasons: list[str] = Field(default_factory=list)
     peak_equity: float = 0.0
+    # Positions too small to exit (below lot step or min notional). Recorded once
+    # so the loop does not regenerate a doomed exit order every single day.
+    dust_symbols: list[str] = Field(default_factory=list)
 
     @classmethod
     def new(cls, initial_capital: float, *, dry_run: bool = True) -> PaperState:

@@ -113,8 +113,9 @@ def validate_order(
     if order.notional < venue.min_notional:
         v.append(f"below_min_notional: {order.notional:.2f} < {venue.min_notional:.2f}")
 
-    qty_dec = Decimal(str(order.qty))
-    if qty_dec % Decimal(venue.lot_size) != 0:
+    # On-grid iff the venue's own quantizer is a no-op on it — validator and
+    # quantizer share one definition, so a quantized qty can never self-reject.
+    if venue.quantize_qty(order.qty) != order.qty:
         v.append(f"lot_size: qty {order.qty:g} not a multiple of {venue.lot_size}")
 
     return None if not v else OrderRejection(order=order, violations=tuple(v))

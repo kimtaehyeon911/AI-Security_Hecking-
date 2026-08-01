@@ -125,13 +125,37 @@ class VenueRules(BaseModel):
     def lot_step(self) -> Decimal:
         return Decimal(self.lot_size)
 
-    def quantize_qty(self, raw: float) -> float:
-        """Snap ``raw`` onto the lot grid, truncating toward zero (never rounds up)."""
+    def units_trunc(self, raw: float) -> int:
+        """Lot units in ``raw``, truncated toward zero (for a NEW target: never
+        exceed the intended magnitude)."""
         from decimal import ROUND_DOWN
 
-        step = self.lot_step
-        units = (Decimal(str(raw)) / step).to_integral_value(rounding=ROUND_DOWN)
-        return float(units * step)
+        return int((Decimal(str(raw)) / self.lot_step).to_integral_value(rounding=ROUND_DOWN))
+
+    def units_nearest(self, raw: float) -> int:
+        """Lot units in ``raw``, rounded half-even (for an EXISTING holding: snap
+        float-accumulated drift back onto the grid instead of dropping a lot)."""
+        from decimal import ROUND_HALF_EVEN
+
+        return int(
+            (Decimal(str(raw)) / self.lot_step).to_integral_value(rounding=ROUND_HALF_EVEN)
+        )
+
+    def qty_from_units(self, units: int) -> float:
+        return float(Decimal(units) * self.lot_step)
+
+    def quantize_qty(self, raw: float) -> float:
+        """Snap ``raw`` onto the lot grid, truncating toward zero (never rounds up)."""
+        return self.qty_from_units(self.units_trunc(raw))
+
+    def delta_qty(self, desired_raw: float, held: float) -> float:
+        """Grid-exact trade delta: trunc the NEW target, nearest-snap the HELD.
+
+        Computing ``quantize(desired - held)`` in float space drops a whole lot
+        whenever accumulated float drift puts ``held`` a hair above its grid
+        point; doing the subtraction in integer lot units removes that entirely.
+        """
+        return self.qty_from_units(self.units_trunc(desired_raw) - self.units_nearest(held))
 
     @field_validator("tick_ladder")
     @classmethod

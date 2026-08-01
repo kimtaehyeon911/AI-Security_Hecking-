@@ -60,7 +60,14 @@ class BrokerOrder(BaseModel):
     order_id: str = ""
     status: str = Field(
         default="accepted",
-        description="Adapters must set 'rejected' for a refused order; callers check it.",
+        description=(
+            "Adapters must NORMALIZE any not-working venue status into the "
+            "denylist vocabulary ('rejected'/'canceled'/'expired') — the accepted "
+            "check is a denylist and cannot know every venue's spellings."
+        ),
+    )
+    raw_status: str = Field(
+        default="", description="The venue's verbatim status string, for the audit trail."
     )
 
     @property

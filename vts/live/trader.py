@@ -110,15 +110,20 @@ class LiveTrader:
                 out[s] = p
         return out
 
-    def _sleeve_held(self, result: CycleResult) -> dict[str, float]:
+    def _sleeve_held(
+        self, result: CycleResult, positions: "list | None" = None
+    ) -> dict[str, float]:
         """Sleeve holdings reconciled with the broker, net of still-working orders.
 
         Only symbols in this system's ledger are considered — the operator's other
         positions are invisible to the trader by construction. Working orders are
-        netted in so an unfilled order is not duplicated next cycle.
+        netted in so an unfilled order is not duplicated next cycle. Pass
+        ``positions`` from a single account snapshot so the cash and position view
+        cannot straddle a fill.
         """
         sleeve = self.state.sleeve_symbols()
-        broker_pos = {p.symbol.strip().upper(): p.qty for p in self.broker.get_positions()}
+        raw = positions if positions is not None else self.broker.get_positions()
+        broker_pos = {p.symbol.strip().upper(): p.qty for p in raw}
         held = {s: broker_pos.get(s, 0.0) for s in sleeve}
         for sym, qty in self.state.sleeve_positions.items():
             if sym in broker_pos and abs(broker_pos[sym] - qty) > 1e-9:
@@ -144,8 +149,10 @@ class LiveTrader:
             if sym not in marks:
                 continue
             price = marks[sym]
-            desired = self.venue.quantize_qty(w * capital / price)   # toward zero
-            delta = self.venue.quantize_qty(desired - held.get(sym, 0.0))
+            # Delta in integer lot units (trunc target, nearest-snap held): real
+            # Binance balances sit off the LOT_SIZE grid, and float-space
+            # subtraction would drop a lot or emit a self-rejecting off-grid qty.
+            delta = self.venue.delta_qty(w * capital / price, held.get(sym, 0.0))
             if delta == 0.0:
                 continue
             # Belt-and-braces: no single order may exceed the whole allocation.
@@ -167,8 +174,18 @@ class LiveTrader:
             if sym not in marks:
                 result.notes.append(f"unpriced sleeve holding {sym} qty={qty:g} — not exited")
                 continue
+            price = marks[sym]
+            exit_qty = self.venue.quantize_qty(abs(qty))   # broker balances sit off-grid
+            if exit_qty == 0.0 or exit_qty * price < self.venue.min_notional:
+                if sym not in self.state.dust_symbols:
+                    self.state.dust_symbols.append(sym)
+                    result.notes.append(
+                        f"dust {sym} qty={qty:g} (~{abs(qty) * price:,.2f}) below "
+                        f"lot/min-notional — not exitable, recorded once"
+                    )
+                continue
             orders.append(Order(symbol=sym, side="sell" if qty > 0 else "buy",
-                                qty=abs(qty), limit_price=marks[sym]))
+                                qty=exit_qty, limit_price=price))
         orders.sort(key=lambda o: 0 if o.side == "sell" else 1)
         return orders
 
@@ -229,14 +246,20 @@ class LiveTrader:
             self._liquidate("; ".join(self.risk.halt.halt_reasons) or "halted", result)
             return result
 
-        # 3) Capital cap re-derived from the broker EVERY cycle.
-        account = self.broker.get_account()
+        # 3) Capital cap re-derived from the broker EVERY cycle. Use one consistent
+        #    (account, positions) snapshot when the adapter provides it, so the
+        #    cash and position views cannot straddle a fill.
+        snapshot = getattr(self.broker, "account_snapshot", None)
+        if callable(snapshot):
+            account, snap_positions = snapshot()
+        else:
+            account, snap_positions = self.broker.get_account(), None
         assert_capital_within_cap(self.live.allocated_capital, account.total_assets)
         if not self.live.dry_run:
             self.live.assert_armed_for_live(account.total_assets)
 
         # 4) Same decision pipeline as backtest/paper.
-        held = self._sleeve_held(result)
+        held = self._sleeve_held(result, snap_positions)
         marks = self._marks(uni_set | set(held), clock)
         priced = {t: marks[t] for t in uni if t in marks}
         aggs = {

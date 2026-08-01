@@ -43,16 +43,33 @@ _ACCEPTED_STATUSES = {"NEW", "PARTIALLY_FILLED", "FILLED"}
 
 
 def _num(value: object) -> float:
-    """Parse a Binance numeric string; non-finite/garbage collapses to 0.0.
+    """Parse a PRICE-like numeric string; non-finite/garbage collapses to 0.0.
 
-    Balances/prices feed the capital-cap denominator, where a NaN would silently
-    disable the cap (a confirmed Step 6 critical) — 0.0 is the fail-closed value.
+    For prices 0.0 is the fail-closed direction: it understates asset value and
+    the capital-cap denominator. NEVER use this for balances — a balance that
+    silently reads 0 makes a position vanish (fail-open); use :func:`_strict_num`.
     """
     try:
         f = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0.0
     return f if math.isfinite(f) else 0.0
+
+
+def _strict_num(value: object, *, context: str) -> float:
+    """Parse a BALANCE-like numeric string; garbage refuses the whole snapshot.
+
+    A corrupt balance must abort the cycle loudly, not read as "position gone" —
+    a vanished position would silently drop out of sleeve reconciliation and
+    liquidation scope.
+    """
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unparseable {context}: {value!r}") from exc
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite {context}: {value!r}")
+    return f
 
 
 def _fmt(value: float) -> str:
@@ -84,11 +101,17 @@ def map_account(
     positions: list[Position] = []
     for bal in account_json.get("balances", []):
         asset = str(bal.get("asset", "")).strip().upper()
-        qty = _num(bal.get("free")) + _num(bal.get("locked"))
-        if not asset or qty == 0.0:
+        if not asset:
+            raise ValueError(f"balance row without an asset: {bal!r}")
+        # Balances are STRICT: a corrupt row refuses the snapshot (fail-closed for
+        # positions); prices stay lenient (0.0 understates, the safe direction).
+        free = _strict_num(bal.get("free"), context=f"{asset} free balance")
+        locked = _strict_num(bal.get("locked"), context=f"{asset} locked balance")
+        qty = free + locked
+        if qty == 0.0:
             continue
         if asset == q:
-            cash = _num(bal.get("free"))
+            cash += free  # += so a duplicated quote row cannot silently overwrite
             total += qty
             continue
         symbol = f"{asset}{q}"
@@ -98,21 +121,64 @@ def map_account(
     return Account(cash=cash, total_assets=total), positions
 
 
-def map_order_response(row: dict) -> BrokerOrder:
-    """Map an /api/v3/order (or openOrders) row to a BrokerOrder.
+def _normalized_status(raw: str) -> str:
+    """Collapse any non-working Binance status into the denylist vocabulary.
 
-    The raw Binance status string is preserved so ``BrokerOrder.accepted`` (which
-    treats rejected/canceled/expired as not-accepted) stays truthful.
+    ``BrokerOrder.accepted`` is a denylist check; Binance statuses it does not
+    know (EXPIRED_IN_MATCH, PENDING_CANCEL, ...) must never read as accepted, so
+    everything outside the explicit working set maps to 'rejected' and the
+    verbatim string rides along in ``raw_status`` for the audit trail.
     """
+    up = raw.strip().upper()
+    return up if up in _ACCEPTED_STATUSES else "rejected"
+
+
+def map_order_response(row: dict, *, fallback_qty: float | None = None) -> BrokerOrder | None:
+    """Map an /api/v3/order response row to a BrokerOrder.
+
+    ``qty`` is the ORIGINAL order quantity (audit view of what was submitted).
+    A row with no usable quantity uses ``fallback_qty`` (the quantity we sent) or
+    returns None — never a fabricated epsilon quantity.
+    """
+    raw = str(row.get("status", "NEW"))
     qty = _num(row.get("origQty"))
+    if qty <= 0:
+        if fallback_qty is None or fallback_qty <= 0:
+            return None
+        qty = fallback_qty
     price = _num(row.get("price"))
     return BrokerOrder(
         symbol=str(row.get("symbol", "")).strip().upper(),
         side="buy" if str(row.get("side", "")).upper() == "BUY" else "sell",
-        qty=qty if qty > 0 else 1e-12,  # schema requires >0; a 0-qty row is broker garbage
+        qty=qty,
         limit_price=price if price > 0 else None,
         order_id=str(row.get("orderId", "")),
-        status=str(row.get("status", "accepted")),
+        status=_normalized_status(raw),
+        raw_status=raw,
+    )
+
+
+def map_open_order(row: dict) -> BrokerOrder | None:
+    """Map an /api/v3/openOrders row to its REMAINING (unfilled) quantity.
+
+    Open-order netting must count only what can still fill: a half-filled order
+    already shows up in balances, so netting origQty would double-count the
+    filled half and the trader would emit a real wrong-way order. Fully-filled /
+    zero-remaining rows return None.
+    """
+    remaining = _num(row.get("origQty")) - _num(row.get("executedQty"))
+    if remaining <= 0:
+        return None
+    raw = str(row.get("status", "NEW"))
+    price = _num(row.get("price"))
+    return BrokerOrder(
+        symbol=str(row.get("symbol", "")).strip().upper(),
+        side="buy" if str(row.get("side", "")).upper() == "BUY" else "sell",
+        qty=remaining,
+        limit_price=price if price > 0 else None,
+        order_id=str(row.get("orderId", "")),
+        status=_normalized_status(raw),
+        raw_status=raw,
     )
 
 
@@ -206,28 +272,46 @@ class BinanceBroker:
         return {str(r["symbol"]).upper(): _num(r["price"]) for r in rows}
 
     # ---------------------------------------------------------------- contract
-    def get_account(self) -> Account:
+    def account_snapshot(self) -> tuple[Account, list[Position]]:
+        """One consistent (account, positions) view from a single /account call.
+
+        Callers needing both must use this — separate get_account/get_positions
+        calls are two snapshots that can straddle a fill.
+        """
         data = self._signed("GET", "/api/v3/account", {})
-        account, _ = map_account(data, self._all_prices(), self._quote)
-        return account
+        return map_account(data, self._all_prices(), self._quote)
+
+    def get_account(self) -> Account:
+        return self.account_snapshot()[0]
 
     def get_positions(self) -> list[Position]:
-        data = self._signed("GET", "/api/v3/account", {})
-        _, positions = map_account(data, self._all_prices(), self._quote)
-        return positions
+        return self.account_snapshot()[1]
 
     def get_open_orders(self) -> list[BrokerOrder]:
         rows = self._signed("GET", "/api/v3/openOrders", {})
-        return [map_order_response(r) for r in rows]
+        return [o for r in rows if (o := map_open_order(r)) is not None]
 
     def cancel_all_orders(self) -> int:
-        """Binance cancels per symbol: enumerate open orders, cancel each symbol."""
+        """Binance cancels per symbol: best-effort across ALL symbols.
+
+        Every symbol is attempted even when one fails; a failure is raised only
+        after the sweep so the caller (liquidate_all records it and continues to
+        the closes) knows, but no symbol's cancel is stranded by another's error.
+        """
         open_orders = self.get_open_orders()
         symbols = {o.symbol for o in open_orders}
         cancelled = 0
+        errors: dict[str, str] = {}
         for sym in sorted(symbols):
-            rows = self._signed("DELETE", "/api/v3/openOrders", {"symbol": sym})
-            cancelled += len(rows) if isinstance(rows, list) else 1
+            try:
+                rows = self._signed("DELETE", "/api/v3/openOrders", {"symbol": sym})
+                cancelled += len(rows) if isinstance(rows, list) else 1
+            except Exception as exc:  # noqa: BLE001 - best-effort sweep
+                errors[sym] = str(exc)
+        if errors:
+            raise RuntimeError(
+                f"cancelled {cancelled} orders but failed for {sorted(errors)}: {errors}"
+            )
         return cancelled
 
     def submit_order(
@@ -244,7 +328,8 @@ class BinanceBroker:
                 "price": _fmt(limit_price),
             },
         )
-        order = map_order_response(row)  # preserves the venue's status verbatim
+        order = map_order_response(row, fallback_qty=qty)
+        assert order is not None  # fallback_qty > 0 guarantees a mapped order
         # A response with no/zero price still carries OUR limit for the audit trail.
         if order.limit_price is None:
             order = order.model_copy(update={"limit_price": limit_price})

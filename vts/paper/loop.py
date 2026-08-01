@@ -137,8 +137,9 @@ class PaperTrader:
             if sym not in marks:
                 continue
             price = marks[sym]
-            desired = self.venue.quantize_qty(w * equity / price)   # toward zero
-            delta = self.venue.quantize_qty(desired - self.state.positions.get(sym, 0.0))
+            # Delta in integer lot units: float-space quantize(desired - held)
+            # drops a whole lot whenever held carries accumulated float drift.
+            delta = self.venue.delta_qty(w * equity / price, self.state.positions.get(sym, 0.0))
             if delta == 0.0:
                 continue
             orders.append(Order(symbol=sym, side="buy" if delta > 0 else "sell",
@@ -146,7 +147,14 @@ class PaperTrader:
         for sym, held in self.state.positions.items():
             if sym in universe or held == 0.0 or sym not in marks:
                 continue
-            orders.append(Order(symbol=sym, side="sell", qty=abs(held), limit_price=marks[sym]))
+            price = marks[sym]
+            qty = self.venue.quantize_qty(abs(held))   # sell the sellable portion
+            if qty == 0.0 or qty * price < self.venue.min_notional:
+                # Unsellable dust: record ONCE, never regenerate a doomed order.
+                if sym not in self.state.dust_symbols:
+                    self.state.dust_symbols.append(sym)
+                continue
+            orders.append(Order(symbol=sym, side="sell", qty=qty, limit_price=price))
         # Sells first: cash freed by liquidations funds the rotation's buys.
         orders.sort(key=lambda o: 0 if o.side == "sell" else 1)
         return orders

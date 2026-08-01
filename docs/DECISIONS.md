@@ -274,3 +274,34 @@ fixed** — the most serious round, as befits the money layer. Four were critica
 
 **Not done (deliberately, needs your explicit go-ahead):** a real broker adapter, live credentials, and
 a first real order. The 8-week paper run (Step 5) should complete and pass the Step 3 gate first.
+
+## Step 6 follow-up — Binance (user decision: 브로커는 바이낸스)
+`vts/sources/binance_data.py` + `vts/live/binance_broker.py`; default profile flipped to
+crypto_spot/binance (`BTCUSDT,ETHUSDT,SOLUSDT`); equities stay via `VTS_ASSET_CLASS=us_equity`.
+
+Key decisions:
+1. **Klines are PIT-mapped at the close boundary** (`event_time == knowledge_time == close`), and the
+   knowledge ceiling is **clamped to the wall clock at ingest** so a future `end` can never store the
+   still-forming candle (its OHLC would later change — an undetectable restatement). Pagination starts
+   one interval early because Binance filters by OPEN time while our `[start, end]` contract is on
+   CLOSE time. Crypto has no corporate actions/filings and Binance no historical news → honest empties.
+2. **Testnet by default** (`testnet.binance.vision`); production needs an explicit `PROD_BASE_URL`, and
+   the arming token / capital cap / kill switch still apply on top. HMAC signing verified against the
+   vector in Binance's public docs. Keys via `BINANCE_API_KEY/SECRET` only (never committed).
+3. **Parse strictness split by failure direction**: prices fail-closed to 0 (understates the 1%-cap
+   denominator), balances fail LOUD (a corrupt balance must abort the cycle, not read as "position
+   gone"). Unpriceable assets stay visible with `last_price=0`.
+4. **Fractional lots**: `VenueRules.lot_size` is an exact Decimal string; `quantize_qty` truncates
+   toward zero; **trade deltas are computed in integer lot units** (trunc target, nearest-snap held) so
+   float drift can neither drop a lot nor emit self-rejecting off-grid quantities; the validator's
+   on-grid check IS the quantizer (one definition). Per-symbol rules from `exchangeInfo` filters.
+5. Sub-lot / sub-min-notional **dust is recorded once** and never regenerates a doomed exit order.
+
+Adversarial review round 7 (kline-PIT / money-mapping / lots): **12 confirmed, 0 dismissed, all fixed**
+(`tests/test_review_fixes_binance.py`): the future-`end` forming-candle leak (HIGH, predicted before the
+review and confirmed with an end-to-end repro); missing leading-edge bar; balance fail-open; open-order
+netting ignored `executedQty` (double-counted partial fills → wrong-way orders); per-symbol cancel sweep
+aborting on first failure; `EXPIRED_IN_MATCH`-style statuses reading as accepted (statuses now
+normalized into the denylist vocabulary, verbatim kept in `raw_status`); two account snapshots straddling
+a fill (single `account_snapshot`); unquantized exits self-rejecting forever (paper + live); float-drift
+lot loss; dust stranding. Tests: 226 passing, 93% coverage.

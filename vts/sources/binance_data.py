@@ -21,7 +21,8 @@ Point-in-time semantics for klines:
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from typing import Callable
 
 import httpx
 
@@ -103,19 +104,34 @@ class BinanceSource:
         base_url: str = DATA_BASE_URL,
         client: httpx.Client | None = None,
         timeout: float = 30.0,
+        now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         if interval not in _INTERVAL_MS:
             raise ValueError(f"unsupported interval {interval!r}")
         self._interval = interval
         self._base = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
+        self._now_fn = now_fn or (lambda: datetime.now(_UTC))
 
     def fetch_ohlcv(self, symbol: str, start: datetime, end: datetime) -> list[OHLCVBar]:
-        """Closed bars in ``[start, end]``, paginating past the 1000-row cap."""
+        """Closed bars in ``[start, end]``, paginating past the 1000-row cap.
+
+        The knowledge ceiling passed to the mapper is ``min(end, NOW)``: with a
+        future ``end``, Binance's still-forming candle carries a scheduled
+        closeTime inside the window and would otherwise be stored as a closed bar
+        whose OHLC later changes — a restatement the PIT store cannot detect
+        because the stamped knowledge_time looks legitimate. Wall clock at the
+        ingest boundary is correct usage: ingestion IS a wall-clock activity
+        (backtest reads stay governed by the as-of clock, not this).
+        """
         sym = symbol.strip().upper()
         step_ms = _INTERVAL_MS[self._interval]
-        start_ms = int(start.timestamp() * 1000)
+        # One interval early: Binance filters klines by OPEN time, but our
+        # [start, end] contract is on CLOSE time — the bar closing exactly at
+        # `start` opened one interval before it and would otherwise be missing.
+        start_ms = int(start.timestamp() * 1000) - step_ms
         end_ms = int(end.timestamp() * 1000)
+        as_of = min(end, self._now_fn())
         out: list[OHLCVBar] = []
         cursor = start_ms
         while cursor <= end_ms:
@@ -130,7 +146,7 @@ class BinanceSource:
             rows = resp.json()
             if not rows:
                 break
-            out.extend(map_klines(sym, rows, interval=self._interval, as_of=end))
+            out.extend(map_klines(sym, rows, interval=self._interval, as_of=as_of))
             last_open = int(rows[-1][0])
             next_cursor = last_open + step_ms
             if next_cursor <= cursor:  # defensive: never loop on a stuck cursor
