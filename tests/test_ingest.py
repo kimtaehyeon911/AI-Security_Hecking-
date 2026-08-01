@@ -47,15 +47,19 @@ def test_ingest_then_asof_read():
 
 def test_settings_from_env_defaults_and_override(monkeypatch):
     s = Settings.from_env()
-    assert s.asset_class == "us_equity"
+    assert s.asset_class == "crypto_spot"       # Binance profile (user decision)
+    assert s.data_source == "binance"
+    assert s.universe == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     assert s.deep_think_llm == "deepseek-v4-pro"
     assert s.temperature == 0.0
     assert s.store_path.name == "pit_store.sqlite"
 
-    monkeypatch.setenv("VTS_ASSET_CLASS", "crypto_spot")
-    monkeypatch.setenv("VTS_UNIVERSE", "btc-usd, eth-usd")
+    monkeypatch.setenv("VTS_ASSET_CLASS", "us_equity")
+    monkeypatch.setenv("VTS_DATA_SOURCE", "alpha_vantage")
+    monkeypatch.setenv("VTS_UNIVERSE", "aapl, msft")
     monkeypatch.setenv("VTS_TEMPERATURE", "0.2")
     s2 = Settings.from_env()
-    assert s2.asset_class == "crypto_spot"
-    assert s2.universe == ["BTC-USD", "ETH-USD"]
+    assert s2.asset_class == "us_equity"        # equities stay reachable via env
+    assert s2.data_source == "alpha_vantage"
+    assert s2.universe == ["AAPL", "MSFT"]
     assert s2.temperature == 0.2

@@ -124,21 +124,22 @@ class PaperTrader:
         equity: float,
         universe: set[str],
     ) -> list[Order]:
-        """Integer-share delta orders vs current holdings, sells sequenced first.
+        """Lot-quantized delta orders vs current holdings, sells sequenced first.
 
-        Uses ``int(...)`` (truncate toward zero) so a position never exceeds the
-        risk-engine-intended weight for either longs or shorts. Held symbols that
-        have left the active universe are liquidated (a full sell), so a curated
-        universe on resume can never strand a position."""
+        ``quantize_qty`` truncates toward zero on the venue's exact Decimal lot
+        grid (integer shares for equities, fractional steps like 0.00001 BTC for
+        crypto), so a position never exceeds the risk-engine-intended weight for
+        either longs or shorts. Held symbols that have left the active universe
+        are liquidated (a full sell), so a curated universe on resume can never
+        strand a position."""
         orders: list[Order] = []
-        lot = self.venue.lot_size
         for sym, w in target.items():
             if sym not in marks:
                 continue
             price = marks[sym]
-            desired = int(w * equity / price / lot) * lot     # toward zero
-            delta = desired - self.state.positions.get(sym, 0.0)
-            if abs(delta) < lot:
+            desired = self.venue.quantize_qty(w * equity / price)   # toward zero
+            delta = self.venue.quantize_qty(desired - self.state.positions.get(sym, 0.0))
+            if delta == 0.0:
                 continue
             orders.append(Order(symbol=sym, side="buy" if delta > 0 else "sell",
                                 qty=abs(delta), limit_price=price))

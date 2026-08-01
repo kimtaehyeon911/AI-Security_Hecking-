@@ -25,7 +25,11 @@ def _env_float(name: str, value: str) -> float:
         raise ValueError(f"{name} must be a finite number, got {value!r}")
     return parsed
 
-_DEFAULT_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"]
+# Binance spot profile (user decision, Step 6 follow-up): crypto has no
+# fundamentals/filings — the fundamentals analyst degrades to a no-op and the
+# thesis rests on price/news/sentiment. Equities remain available via
+# VTS_ASSET_CLASS=us_equity + VTS_DATA_SOURCE=alpha_vantage.
+_DEFAULT_UNIVERSE = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 
 class Settings(BaseModel):
@@ -34,8 +38,8 @@ class Settings(BaseModel):
     model_config = {"frozen": True}
 
     # --- asset / venue -------------------------------------------------------
-    asset_class: str = Field(default="us_equity", description="us_equity | kr_equity | crypto_spot")
-    data_source: str = Field(default="alpha_vantage", description="Backtest data vendor.")
+    asset_class: str = Field(default="crypto_spot", description="crypto_spot | us_equity | kr_equity")
+    data_source: str = Field(default="binance", description="Backtest data vendor.")
     universe: list[str] = Field(default_factory=lambda: list(_DEFAULT_UNIVERSE))
 
     # --- LLM (Step 2/3 wiring) ----------------------------------------------

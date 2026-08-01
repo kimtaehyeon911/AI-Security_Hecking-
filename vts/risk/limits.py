@@ -95,14 +95,43 @@ class VenueRules(BaseModel):
     bound; the tick for a price is the first row whose bound exceeds it (KRX-style
     price-banded ticks; a flat-tick venue like US equities uses one row).
     Values are strings converted to Decimal so tick arithmetic is exact.
+
+    ``lot_size`` is stored as an exact Decimal STRING (crypto steps like
+    ``"0.00001"`` cannot be represented as a binary float without artifacts; an
+    int like ``10`` is accepted and normalized). Use :meth:`quantize_qty` to snap
+    a raw quantity onto the step grid — it truncates toward zero, so a quantized
+    position can never exceed the intended magnitude for longs or shorts.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = "us_equity"
     tick_ladder: tuple[tuple[float, str], ...] = ((float("inf"), "0.01"),)
-    lot_size: int = Field(default=1, ge=1)
+    lot_size: str = "1"
     min_notional: float = Field(default=1.0, ge=0.0)
+
+    @field_validator("lot_size", mode="before")
+    @classmethod
+    def _lot_to_exact_string(cls, v) -> str:
+        try:
+            step = Decimal(str(v))
+        except Exception as exc:  # noqa: BLE001 - normalize to a clear error
+            raise ValueError(f"lot_size must be numeric, got {v!r}") from exc
+        if not step.is_finite() or step <= 0:
+            raise ValueError(f"lot_size must be a positive finite number, got {v!r}")
+        return format(step, "f")
+
+    @property
+    def lot_step(self) -> Decimal:
+        return Decimal(self.lot_size)
+
+    def quantize_qty(self, raw: float) -> float:
+        """Snap ``raw`` onto the lot grid, truncating toward zero (never rounds up)."""
+        from decimal import ROUND_DOWN
+
+        step = self.lot_step
+        units = (Decimal(str(raw)) / step).to_integral_value(rounding=ROUND_DOWN)
+        return float(units * step)
 
     @field_validator("tick_ladder")
     @classmethod
@@ -145,3 +174,14 @@ KRX_KOSPI = VenueRules(
 )
 
 US_EQUITY = VenueRules(name="us_equity")
+
+# Conservative Binance-spot fallback (BTCUSDT-magnitude filters). Real trading
+# should build per-symbol rules from /api/v3/exchangeInfo via
+# ``vts.live.binance_broker.venue_from_exchange_filters`` — Binance filters vary
+# per symbol and drift over time; this default only keeps offline runs sane.
+BINANCE_SPOT_DEFAULT = VenueRules(
+    name="binance_spot",
+    tick_ladder=((float("inf"), "0.01"),),
+    lot_size="0.00001",
+    min_notional=5.0,
+)

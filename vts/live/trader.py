@@ -138,16 +138,15 @@ class LiveTrader:
         self, target: dict[str, float], marks: dict[str, float], capital: float,
         held: dict[str, float], universe: set[str], result: CycleResult,
     ) -> list[Order]:
-        """Integer-share deltas vs sleeve holdings; sells sequenced first."""
+        """Lot-quantized deltas vs sleeve holdings; sells sequenced first."""
         orders: list[Order] = []
-        lot = self.venue.lot_size
         for sym, w in target.items():
             if sym not in marks:
                 continue
             price = marks[sym]
-            desired = int(w * capital / price / lot) * lot   # toward zero
-            delta = desired - held.get(sym, 0.0)
-            if abs(delta) < lot:
+            desired = self.venue.quantize_qty(w * capital / price)   # toward zero
+            delta = self.venue.quantize_qty(desired - held.get(sym, 0.0))
+            if delta == 0.0:
                 continue
             # Belt-and-braces: no single order may exceed the whole allocation.
             if abs(delta) * price > capital:
@@ -155,8 +154,9 @@ class LiveTrader:
                     f"clipped {sym}: delta notional {abs(delta) * price:,.2f} > "
                     f"allocation {capital:,.2f}"
                 )
-                delta = (int(capital / price / lot) * lot) * (1 if delta > 0 else -1)
-                if abs(delta) < lot:
+                clipped = self.venue.quantize_qty(capital / price)
+                delta = clipped if delta > 0 else -clipped
+                if delta == 0.0:
                     continue
             orders.append(Order(symbol=sym, side="buy" if delta > 0 else "sell",
                                 qty=abs(delta), limit_price=price))
