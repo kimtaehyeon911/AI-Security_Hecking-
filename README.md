@@ -82,12 +82,25 @@ Thumbs.db
 This branch hosts a separate work stream: a **verifiable automated-trading system** built on a fork of
 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache-2.0), adopting
 Trading-R1's evidence-based thesis → 5-tier rating (`Buy/Overweight/Hold/Underweight/Sell`).
+Broker/data: **Binance spot** (testnet by default). All six steps are implemented:
 
-Priority order: **(1) backtest harness → (2) paper trading → (3) live trading (kill-switch mandatory, last)**.
+| | package | what it guarantees |
+|---|---|---|
+| data | `vts/pit`, `vts/sources` | two-timestamp point-in-time store; `assert_no_lookahead` at egress; close-boundary klines, forming-candle rejection |
+| backtest | `vts/backtest` | walk-forward, cost model, LLM knowledge-cutoff contamination gate, N-vote + dispersion, **"beat buy&hold AND 60/40 after costs or FAIL"** gate |
+| risk | `vts/risk` | frozen limits an LLM can never touch; weak decisions forced to Hold; daily-loss/drawdown halt latch; order pre-validation |
+| paper | `vts/paper` | same code path forward-run; daily implementation-shortfall log; resumable atomic state |
+| live | `vts/live` | hardcoded ≤1%-of-assets cap, exact arming token, kill switch = cancel+liquidate+**verify flat**, sleeve-scoped (never touches other holdings) |
 
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
+.venv/bin/python -m pytest                                   # 232 tests
+.venv/bin/python -m vts ingest   --start 2025-01-01 --end 2025-06-30
+.venv/bin/python -m vts backtest --start 2025-02-01 --end 2025-06-30   # exit code = gate
+.venv/bin/python -m vts paper    --start 2025-07-01 --end 2025-08-31
+.venv/bin/python -m vts live     --capital 100               # dry-run by default
+```
+
+- **Operations runbook / go-live checklist: [`docs/HANDOVER.md`](docs/HANDOVER.md)**
+- Decision log (7 adversarial review rounds, 84 confirmed defects fixed): [`docs/DECISIONS.md`](docs/DECISIONS.md)
 - Step 0 code-reading analysis: [`docs/step0_code_reading.md`](docs/step0_code_reading.md)
-- Running decision log: [`docs/DECISIONS.md`](docs/DECISIONS.md)
-
-Progress: **Step 0** (code map), **Step 1** (`vts/pit`, `vts/sources` — point-in-time data layer),
-**Step 2** (`vts/backtest` — walk-forward engine: cost model, cutoff gate, N=3 vote, no-lookahead
-execution). Run tests with `.venv/bin/python -m pytest`.
