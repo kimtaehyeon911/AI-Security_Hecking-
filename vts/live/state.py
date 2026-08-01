@@ -36,6 +36,19 @@ class LiveState(BaseModel):
         default_factory=list,
         description="Sleeve positions too small to exit (sub-lot / sub-min-notional), noted once.",
     )
+    # Halt-feed state: without these, the daily-loss/drawdown stops could never
+    # latch in live mode (each CLI invocation built a fresh engine with no
+    # return/peak history — a confirmed review finding).
+    last_cycle_date: str = Field(
+        default="", description="ISO date of the previous cycle; anchors the daily-mark feed."
+    )
+    sleeve_equity: float = Field(
+        default=0.0,
+        description="Compounded sleeve equity proxy (allocated capital × Π(1+daily returns)).",
+    )
+    peak_equity: float = Field(
+        default=0.0, description="Peak of sleeve_equity, persisted for the drawdown latch."
+    )
 
     def sleeve_symbols(self) -> set[str]:
         return {s for s, q in self.sleeve_positions.items() if q != 0.0}

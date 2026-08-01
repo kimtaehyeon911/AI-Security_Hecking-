@@ -94,7 +94,7 @@ Broker/data: **Binance spot** (testnet by default). All six steps are implemente
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/python -m pytest                                   # 232 tests
+.venv/bin/python -m pytest                                   # 237 tests
 .venv/bin/python -m vts ingest   --start 2025-01-01 --end 2025-06-30
 .venv/bin/python -m vts backtest --start 2025-02-01 --end 2025-06-30   # exit code = gate
 .venv/bin/python -m vts paper    --start 2025-07-01 --end 2025-08-31
@@ -102,5 +102,5 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[de
 ```
 
 - **Operations runbook / go-live checklist: [`docs/HANDOVER.md`](docs/HANDOVER.md)**
-- Decision log (7 adversarial review rounds, 84 confirmed defects fixed): [`docs/DECISIONS.md`](docs/DECISIONS.md)
+- Decision log (8 adversarial review rounds, 87 confirmed defects fixed): [`docs/DECISIONS.md`](docs/DECISIONS.md)
 - Step 0 code-reading analysis: [`docs/step0_code_reading.md`](docs/step0_code_reading.md)

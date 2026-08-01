@@ -25,7 +25,13 @@ from pathlib import Path
 
 from vts.backtest.cache import DecisionCache
 from vts.backtest.costs import CostModel
-from vts.backtest.engine import BacktestConfig, _dollar_adv, _last_close, sample_decisions
+from vts.backtest.engine import (
+    BacktestConfig,
+    _dollar_adv,
+    _interval_daily_returns,
+    _last_close,
+    sample_decisions,
+)
 from vts.live.broker import BrokerClient
 from vts.live.config import LiveConfig, assert_capital_within_cap, live_trading_armed
 from vts.live.liquidate import LiquidationReport, liquidate_all
@@ -83,10 +89,14 @@ class LiveTrader:
         self.audit_path = Path(audit_path) if audit_path else None
         self.state_path = Path(state_path) if state_path else None
         self.state = LiveState.load_or_new(self.state_path)
-        # Rehydrate the durable halt latch so a restart cannot resume trading.
+        # Rehydrate the durable halt latch so a restart cannot resume trading,
+        # and the drawdown peak so the from-peak stop survives across processes.
         if self.state.halted:
             self.risk.halt.halted = True
             self.risk.halt.halt_reasons = list(self.state.halt_reasons)
+        self.risk.halt._peak_equity = max(
+            self.risk.halt._peak_equity, self.state.peak_equity
+        )
 
     # ------------------------------------------------------------------ helpers
     def _audit(self, line: str) -> None:
@@ -99,8 +109,38 @@ class LiveTrader:
     def _persist(self) -> None:
         self.state.halted = self.risk.halt.halted
         self.state.halt_reasons = list(self.risk.halt.halt_reasons)
+        self.state.peak_equity = self.risk.halt._peak_equity
         if self.state_path is not None:
             self.state.save(self.state_path)
+
+    def _feed_halt(self, held: dict[str, float], date: datetime, result: CycleResult) -> None:
+        """Feed the loss/drawdown latch genuine DAILY sleeve marks (review finding:
+        without this the configured stops could never fire in live mode).
+
+        Daily returns come from the PIT store over the interval since the last
+        cycle, weighted by the sleeve's holdings — the same
+        ``_interval_daily_returns`` decomposition the backtest and paper loop use.
+        ``sleeve_equity`` compounds those returns from the allocation and feeds
+        the drawdown-from-peak stop; both survive restarts via LiveState.
+        """
+        if self.state.sleeve_equity <= 0:
+            self.state.sleeve_equity = self.live.allocated_capital
+        if self.state.last_cycle_date:
+            prev_dt = datetime.fromisoformat(self.state.last_cycle_date)
+            prev_clock = AsOfClock.at(prev_dt)
+            equity = self.state.sleeve_equity
+            weights: dict[str, float] = {}
+            for sym, qty in held.items():
+                pp = _last_close(self.store, sym, prev_clock)
+                if pp and pp > 0 and equity > 0:
+                    weights[sym] = qty * pp / equity
+            for dr in _interval_daily_returns(self.store, weights, prev_dt, date):
+                self.risk.observe_daily_return(dr)
+                self.state.sleeve_equity *= 1.0 + dr
+        self.risk.observe_equity(self.state.sleeve_equity)
+        self.state.last_cycle_date = date.isoformat()
+        if self.risk.halt.halted:
+            result.notes.append("risk halt latched by this cycle's daily marks")
 
     def _marks(self, symbols: set[str], clock: AsOfClock) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -258,8 +298,13 @@ class LiveTrader:
         if not self.live.dry_run:
             self.live.assert_armed_for_live(account.total_assets)
 
-        # 4) Same decision pipeline as backtest/paper.
+        # 4) Feed the loss/drawdown latch, then run the same decision pipeline.
         held = self._sleeve_held(result, snap_positions)
+        self._feed_halt(held, date, result)
+        if self.risk.halt.halted:
+            # Latched by THIS cycle's marks: liquidate now, not one cycle later.
+            self._liquidate("; ".join(self.risk.halt.halt_reasons) or "halted", result)
+            return result
         marks = self._marks(uni_set | set(held), clock)
         priced = {t: marks[t] for t in uni if t in marks}
         aggs = {

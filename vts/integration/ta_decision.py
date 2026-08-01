@@ -147,7 +147,11 @@ class TradingAgentsDecisionModel:  # pragma: no cover - requires the fork + netw
         return self._graph
 
     def prompt_for(self, ticker: str, clock: AsOfClock) -> str:
-        return f"tradingagents:{ticker.upper()}@{clock.as_of.date()}"
+        # Data fingerprint in the cache key: a re-ingest that changes what the
+        # graph can see must bust the cache, not replay stale decisions.
+        bars = self.store.get_ohlcv(ticker, clock)
+        fp = f"{len(bars)},{bars[-1].event_time.isoformat() if bars else '-'}"
+        return f"tradingagents(data={fp}):{ticker.upper()}@{clock.as_of.date()}"
 
     def decide(self, ticker: str, clock: AsOfClock) -> Decision:
         from vts.integration.tradingagents_vendor import CURRENT_CLOCK

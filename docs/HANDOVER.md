@@ -29,7 +29,7 @@ Binance klines (공개 API)
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/python -m pytest            # 232개 전부 green이어야 정상
+.venv/bin/python -m pytest            # 237개 전부 green이어야 정상
 cp .env.example .env                  # 키 기입 (절대 커밋 금지)
 
 .venv/bin/python -m vts ingest   --start 2025-01-01 --end 2025-06-30
@@ -43,9 +43,15 @@ cp .env.example .env                  # 키 기입 (절대 커밋 금지)
 - `backtest`의 **종료 코드가 게이트 판정**입니다: 0 = PASS(비용차감 후 buy&hold와 60/40을 모두
   초과), 1 = FAIL. CI에 그대로 물릴 수 있습니다.
 - 기본 모델은 결정론적 `momentum`(오프라인 검증용). LLM 그래프는 fork 설치 + `.env`의 LLM 키 후
-  `--model tradingagents --samples 3`.
+  `--model tradingagents` — 이때 N=3 다수결이 자동 기본값입니다(`--samples`로 조정).
+- **`vts live`는 드라이런이어도 테스트넷 키가 필요**합니다(자본 한도·주문 검증이 실계좌 스냅샷
+  기준이라 서명 호출이 필수). 키가 없으면 명확한 에러로 중단됩니다.
+- **재적재(re-ingest) 후에는 캐시가 자동 무효화**됩니다(결정 캐시 키에 가시 바 지문 포함).
+  강제로 비우려면 `vts cache-clear`, 1회성 무캐시 실행은 `--no-cache`.
 - 프로필 변경은 `VTS_*` 환경변수(`.env.example` 참조). 주식으로 돌아가려면
   `VTS_ASSET_CLASS=us_equity VTS_DATA_SOURCE=alpha_vantage`.
+- `VTS_DATA_DIR`는 저장소 밖(기본 `~/.vts`)을 권장 — 리포 안으로 지정하면 상태 파일이 커밋될 수
+  있습니다(`.gitignore`가 `*.sqlite`·`.vts/`는 방어).
 
 ## 3. 실거래 전 필수 관문 (순서 고정 — 건너뛰지 말 것)
 

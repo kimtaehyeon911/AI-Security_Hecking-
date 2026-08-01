@@ -71,13 +71,40 @@ def _venue(settings: Settings) -> VenueRules:
     return BINANCE_SPOT_DEFAULT  # per-symbol exchangeInfo rules are a live concern
 
 
+def _samples(args: argparse.Namespace) -> int:
+    """Default N: 1 for the deterministic momentum model, 3 (mandated) for LLMs."""
+    if args.samples is not None:
+        return args.samples
+    return 3 if args.model == "tradingagents" else 1
+
+
+def _cache(args: argparse.Namespace, settings: Settings) -> DecisionCache:
+    if getattr(args, "no_cache", False):
+        return DecisionCache()  # throwaway in-memory
+    return DecisionCache(settings.data_dir / "decision_cache.sqlite")
+
+
 def _decision_dates(
-    store: PointInTimeStore, anchor: str, start: datetime, end: datetime
+    store: PointInTimeStore, symbols: list[str], start: datetime, end: datetime
 ) -> list[datetime]:
-    """Daily decision dates = the anchor symbol's bar closes inside [start, end]."""
+    """Daily decision dates = the UNION of all universe symbols' bar closes.
+
+    Anchoring on a single symbol silently shrinks the whole run when that symbol
+    has sparse coverage (a confirmed review finding); the union keeps every
+    trading day any symbol traded, and per-symbol gaps are reported loudly.
+    """
     clock = AsOfClock.at(end + timedelta(days=2))
-    bars = store.get_ohlcv(anchor, clock, start=start, end=end + timedelta(days=1))
-    return [b.event_time for b in bars if start <= b.event_time <= end]
+    per_symbol: dict[str, set[datetime]] = {}
+    for sym in symbols:
+        bars = store.get_ohlcv(sym, clock, start=start, end=end + timedelta(days=1))
+        per_symbol[sym] = {b.event_time for b in bars if start <= b.event_time <= end}
+    union: set[datetime] = set().union(*per_symbol.values()) if per_symbol else set()
+    for sym, times in per_symbol.items():
+        missing = len(union) - len(times)
+        if union and missing > 0:
+            print(f"warning: {sym} covers {len(times)}/{len(union)} decision dates "
+                  f"in this window", file=sys.stderr)
+    return sorted(union)
 
 
 # ------------------------------------------------------------------- commands
@@ -96,7 +123,7 @@ def cmd_ingest(args: argparse.Namespace, settings: Settings) -> int:
 def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
     store = PointInTimeStore(settings.store_path)
     start, end = _parse_date(args.start), _parse_date(args.end)
-    dates = _decision_dates(store, settings.universe[0], start, end)
+    dates = _decision_dates(store, settings.universe, start, end)
     if len(dates) < 2:
         print("not enough bars in the store for this window — run `ingest` first",
               file=sys.stderr)
@@ -104,8 +131,8 @@ def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
     model = _make_model(args.model, store)
     bt = Backtester(
         store, model,
-        cache=DecisionCache(settings.data_dir / "decision_cache.sqlite"),
-        config=BacktestConfig(n_samples=args.samples),
+        cache=_cache(args, settings),
+        config=BacktestConfig(n_samples=_samples(args)),
         risk=RiskEngine(RiskLimits.from_env()),
     )
     result = bt.run(settings.universe, dates)
@@ -125,15 +152,15 @@ def cmd_paper(args: argparse.Namespace, settings: Settings) -> int:
 
     store = PointInTimeStore(settings.store_path)
     start, end = _parse_date(args.start), _parse_date(args.end)
-    dates = _decision_dates(store, settings.universe[0], start, end)
+    dates = _decision_dates(store, settings.universe, start, end)
     if not dates:
         print("no bars in the store for this window — run `ingest` first", file=sys.stderr)
         return 2
     trader = PaperTrader(
         store, _make_model(args.model, store), RiskEngine(RiskLimits.from_env()),
         venue=_venue(settings), state_path=settings.data_dir / "paper_state.json",
-        cache=DecisionCache(settings.data_dir / "decision_cache.sqlite"),
-        config=BacktestConfig(n_samples=args.samples),
+        cache=_cache(args, settings),
+        config=BacktestConfig(n_samples=_samples(args)),
     )
     state = trader.run(settings.universe, dates)
     last = state.shortfall_log[-1] if state.shortfall_log else {}
@@ -159,8 +186,8 @@ def cmd_live(args: argparse.Namespace, settings: Settings) -> int:
         venue=_venue(settings),
         live_config=LiveConfig(allocated_capital=args.capital,
                                dry_run=not args.go_live),
-        cache=DecisionCache(settings.data_dir / "decision_cache.sqlite"),
-        config=BacktestConfig(n_samples=args.samples),
+        cache=_cache(args, settings),
+        config=BacktestConfig(n_samples=_samples(args)),
         audit_path=settings.data_dir / "live_audit.log",
         state_path=settings.data_dir / "live_state.json",
     )
@@ -232,6 +259,16 @@ def cmd_reset_halt(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_cache_clear(args: argparse.Namespace, settings: Settings) -> int:
+    path = settings.data_dir / "decision_cache.sqlite"
+    if path.exists():
+        path.unlink()
+        print(f"deleted {path}")
+    else:
+        print("no decision cache to delete")
+    return 0
+
+
 # ---------------------------------------------------------------------- main
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vts", description=__doc__,
@@ -241,8 +278,12 @@ def build_parser() -> argparse.ArgumentParser:
     def _common(sp):
         sp.add_argument("--model", default="momentum",
                         choices=["momentum", "tradingagents"])
-        sp.add_argument("--samples", type=int, default=1,
-                        help="N samples per decision (majority vote); use 3 for LLMs")
+        sp.add_argument("--samples", type=int, default=None,
+                        help="N samples per decision (majority vote). Default: 1 for "
+                             "the deterministic momentum model, 3 for LLM models "
+                             "(the mandated N=3 vote).")
+        sp.add_argument("--no-cache", action="store_true",
+                        help="use a throwaway in-memory decision cache for this run")
 
     sp = sub.add_parser("ingest", help="pull point-in-time data into the store")
     sp.add_argument("--start", required=True)
@@ -279,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--operator", required=True,
                     help="who is clearing the halt (recorded in the audit trail)")
     sp.set_defaults(func=cmd_reset_halt)
+
+    sp = sub.add_parser("cache-clear",
+                        help="delete the shared decision cache (e.g. after a re-ingest)")
+    sp.set_defaults(func=cmd_cache_clear)
 
     return p
 

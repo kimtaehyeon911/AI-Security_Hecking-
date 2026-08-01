@@ -275,6 +275,25 @@ fixed** — the most serious round, as befits the money layer. Four were critica
 **Not done (deliberately, needs your explicit go-ahead):** a real broker adapter, live credentials, and
 a first real order. The 8-week paper run (Step 5) should complete and pass the Step 3 gate first.
 
+## Wrap-up — CLI, runbook, final review (round 8)
+Operational CLI (`python -m vts`: ingest/backtest/paper/live/status/reset-halt/cache-clear), the
+HANDOVER runbook, and the final review. Round 8 ran partially (9 of 20 verify agents hit a session
+limit); **3 findings were fully CONFIRMED with empirical repros and fixed**, and the unverified claims
+were manually triaged (fixes applied where real, noted where not):
+- **HIGH: live halts could never latch.** `run_cycle` never fed `observe_daily_return`/`observe_equity`
+  and each CLI invocation built a fresh engine with no peak/return history — the configured daily-loss
+  and drawdown stops were dead in live mode. Fixed: `_feed_halt` feeds genuine daily marks via the same
+  `_interval_daily_returns` decomposition, a compounded `sleeve_equity` proxy feeds the drawdown stop,
+  and `last_cycle_date`/`sleeve_equity`/`peak_equity` persist in `LiveState`; a latch fires an immediate
+  liquidation in the same cycle.
+- MED: decision calendar anchored on `universe[0]` silently shrank runs → union across all symbols with
+  a loud per-symbol coverage warning.
+- MED: decision cache omitted store contents, replaying stale decisions after a re-ingest → visible-bar
+  fingerprint (count + last close) mixed into every model's prompt/cache key; `--no-cache` flag and
+  `vts cache-clear` added. Manual triage: `--samples` now defaults to the mandated N=3 for LLM models
+  (1 for deterministic momentum); HANDOVER documents that `vts live` needs testnet keys even in dry-run
+  and that `VTS_DATA_DIR` should stay outside the repo. Tests: 237 passing.
+
 ## Step 6 follow-up — Binance (user decision: 브로커는 바이낸스)
 `vts/sources/binance_data.py` + `vts/live/binance_broker.py`; default profile flipped to
 crypto_spot/binance (`BTCUSDT,ETHUSDT,SOLUSDT`); equities stay via `VTS_ASSET_CLASS=us_equity`.

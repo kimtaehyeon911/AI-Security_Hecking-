@@ -55,13 +55,18 @@ class FakeMomentumModel:
         self.p = params or MomentumParams()
 
     def prompt_for(self, ticker: str, clock: AsOfClock) -> str:
-        # Encode EVERY param that affects decide(): the cache key hashes this prompt,
-        # so a param change must alter it or a persistent cache would serve stale
-        # ratings computed under a different configuration.
+        # Encode EVERY input that affects decide(): the cache key hashes this
+        # prompt, so a change must alter it or a persistent cache serves stale
+        # ratings. That includes the DATA — decide() reads the store, so the
+        # visible-bar fingerprint (count + last close time) is part of the key;
+        # a re-ingest that backfills bars busts the cache instead of replaying
+        # decisions computed from the old, incomplete data.
         p = self.p
+        bars = self._store.get_ohlcv(ticker, clock)
+        fp = f"{len(bars)},{bars[-1].event_time.isoformat() if bars else '-'}"
         return (
             f"momentum(lb={p.lookback_bars},strong={p.strong_threshold},"
-            f"mild={p.mild_threshold},cscale={p.confidence_scale}):"
+            f"mild={p.mild_threshold},cscale={p.confidence_scale},data={fp}):"
             f"{ticker.upper()}@{clock.as_of.isoformat()}"
         )
 
