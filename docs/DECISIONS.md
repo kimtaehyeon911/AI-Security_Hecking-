@@ -275,6 +275,20 @@ fixed** — the most serious round, as befits the money layer. Four were critica
 **Not done (deliberately, needs your explicit go-ahead):** a real broker adapter, live credentials, and
 a first real order. The 8-week paper run (Step 5) should complete and pass the Step 3 gate first.
 
+## Cutoff research applied (operator input, 2026-08-02)
+DeepSeek publishes no official knowledge cutoff (like Meta/Mistral); third-party values conflict.
+Direction rule codified after the operator caught it stated backwards in research notes:
+**contamination lies BEFORE the cutoff, so conservative = max(sources) + buffer, never the earliest
+date** (an early date passes contaminated windows as clean). `CutoffRegistry` now supports
+`buffer_days` (effective cutoff = cutoff + buffer; negative buffers refused as UNKNOWN), and the
+registry carries operator-adopted values: V4 = 2026-04-30 + 60d (effective 2026-06-29), V3 =
+2024-07-31 + 60d (effective 2024-09-29). `verified` is redefined as "operator-adopted after research,
+basis recorded in note" for vendors with no official value. Consequence: V4's clean crypto window is
+only weeks long as of 2026-08 → HANDOVER §3 now prescribes a dual track (validate on V3's ~23-month
+clean window; run V4 in paper — forward data is definitionally clean — and revisit V4 backtests as its
+window grows). Binance keys installed to gitignored .env (chmod 600); testnet verification blocked by
+this sandbox's egress proxy, to be done locally.
+
 ## Wrap-up — CLI, runbook, final review (round 8)
 Operational CLI (`python -m vts`: ingest/backtest/paper/live/status/reset-halt/cache-clear), the
 HANDOVER runbook, and the final review. Round 8 ran partially (9 of 20 verify agents hit a session

@@ -55,10 +55,23 @@ cp .env.example .env                  # 키 기입 (절대 커밋 금지)
 
 ## 3. 실거래 전 필수 관문 (순서 고정 — 건너뛰지 말 것)
 
-1. **모델 knowledge cutoff 기입**: `vts/backtest/model_cutoffs.json`에 사용 모델의 cutoff 날짜를
-   공식 문서에서 확인해 넣고 `verified: true`. 미기입 시 모든 결과는 `unknown`(오염 미판정)으로
-   표기되며 게이트가 clean을 인증하지 않습니다. **날짜를 추측으로 넣지 마세요.**
-2. **백테스트 구간은 cutoff 이후로만**. cutoff 이전 성과는 "참고용(오염 가능)"입니다.
+1. **모델 knowledge cutoff 기입** (`vts/backtest/model_cutoffs.json`):
+   - **방향 규칙**: 오염 구간은 cutoff **이전**입니다. 따라서 출처가 엇갈리면 **가장 늦은
+     날짜(max)를 채택 + `buffer_days` 30~60일**이 보수적입니다. 이른 날짜를 고르면 오염
+     구간이 clean으로 통과합니다 — 게이트가 막으려던 바로 그것.
+   - DeepSeek·Meta·Mistral은 공식 cutoff를 발표하지 않습니다(2026-08-02 조사). 이 경우
+     `verified: true`는 "운영자가 조사 후 책임지고 채택한 값"을 뜻하며 근거를 `note`에
+     남깁니다. DeepSeek V4/V3 항목은 이 방식으로 이미 기입돼 있습니다(effective =
+     cutoff + buffer_days).
+2. **백테스트 구간은 effective cutoff 이후로만**. 이전 성과는 "참고용(오염 가능)"입니다.
+   - **V4의 현실 문제**: V4 effective cutoff ≈ 2026-06 → 현재 깨끗한 구간이 수 주~수개월뿐이라
+     암호화폐 백테스트로는 통계적 검증이 불가능합니다. **이중 트랙으로 운영하세요**:
+     - **검증 트랙 (V3)**: effective 2024-09-29 → 약 23개월의 clean 구간. 전략·하네스·게이트
+       검증은 V3로 수행 (`VTS_DEEP_THINK_LLM=deepseek-v3` 등).
+     - **운영 트랙 (V4)**: 페이퍼 트레이딩은 **미래 방향 실시간 데이터라 정의상 항상
+       clean**입니다 — V4는 페이퍼로 즉시 검증 시작. V4의 clean 백테스트 구간은 하루에
+       하루씩 자라므로 6개월 후 재평가.
+     - 두 트랙 결론이 갈리면(V3 백테스트 PASS인데 V4 페이퍼가 계속 뒤처짐 등) 라이브 금지.
 3. **게이트 PASS**: 비용차감 후 두 벤치마크 모두 초과 + cutoff-clean 구간에서 `certifiable`.
 4. **페이퍼 8주**: `vts paper`를 매일 실행(재시작 안전·멱등). shortfall `gap`이 지속 확대되면
    모델이 아니라 실행 마찰이 원인이므로 라이브 진행 금지.

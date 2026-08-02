@@ -9,12 +9,19 @@ labelled reference-only, never counted as a clean result.
 We refuse to invent cutoff dates: the registry ships with ``null`` cutoffs that
 the user fills and marks ``verified``. An unknown/unverified/null cutoff yields
 status ``UNKNOWN`` — the gate will not certify a segment as clean on a guess.
+
+Direction of conservatism (this was once stated backwards in research notes, so
+it is spelled out here): contamination lies BEFORE the cutoff, so when sources
+disagree the safe choice is the LATEST candidate date — adopting an early date
+would classify genuinely-contaminated dates as clean. Encode residual
+uncertainty as ``buffer_days``: the effective cutoff is ``cutoff + buffer_days``,
+pushing the clean window later, never earlier.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from importlib import resources
 from pathlib import Path
@@ -42,11 +49,20 @@ class CutoffRegistry:
         return cls(data.get("models", {}))
 
     def cutoff_for(self, model_id: str) -> date | None:
+        """EFFECTIVE cutoff: the registry date pushed LATER by ``buffer_days``.
+
+        The buffer encodes source uncertainty in the only safe direction — a
+        buffer can never widen the clean window, only shrink it.
+        """
         entry = self._models.get(model_id)
         if not entry or not entry.get("verified") or not entry.get("cutoff"):
             return None
         try:
-            return datetime.strptime(entry["cutoff"], "%Y-%m-%d").date()
+            base = datetime.strptime(entry["cutoff"], "%Y-%m-%d").date()
+            buffer_days = int(entry.get("buffer_days", 0))
+            if buffer_days < 0:
+                return None  # a negative buffer would WIDEN the clean window: refuse
+            return base + timedelta(days=buffer_days)
         except (ValueError, TypeError):
             # A malformed 'verified' date is not certifiable -> degrade to UNKNOWN
             # (return None) rather than crashing the whole backtest. The gate never

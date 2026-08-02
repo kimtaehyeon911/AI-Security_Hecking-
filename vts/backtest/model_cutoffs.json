@@ -1,10 +1,26 @@
 {
-  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the selected model's cutoff or its decisions may be contaminated by memorized future outcomes. Fill in exact dates and set verified=true once confirmed from the provider's docs. Unknown/unverified models are treated conservatively by the gate (status 'unknown' -> not certifiable as clean). Dates are ISO 'YYYY-MM-DD' (the last date the model could know about).",
+  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the model's EFFECTIVE cutoff (cutoff + buffer_days) or its decisions may be contaminated by memorized outcomes. DIRECTION OF CONSERVATISM: contamination lies BEFORE the cutoff, so when sources disagree adopt the LATEST candidate date (max across sources) and add buffer_days (30-60) for residual uncertainty — an early date would classify contaminated dates as clean, defeating the gate. 'verified: true' means the OPERATOR adopted the value after research and takes responsibility for it (some vendors, incl. DeepSeek/Meta/Mistral, publish no official cutoff — record the basis in 'note'). Unverified/null entries classify as 'unknown' (never guessed clean). Dates are ISO 'YYYY-MM-DD'.",
   "models": {
-    "deepseek-v4-pro":   {"cutoff": null, "verified": false, "note": "set from DeepSeek docs before trusting a clean segment"},
-    "deepseek-v4-flash": {"cutoff": null, "verified": false, "note": "set from DeepSeek docs before trusting a clean segment"},
-    "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs"},
-    "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs"},
-    "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs"}
+    "deepseek-v4-pro": {
+      "cutoff": "2026-04-30",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "No official cutoff published by DeepSeek. V4 released 2026-04; third-party aggregators cluster near the release date. Adopted max(sources)=release month end + 60d buffer (operator research 2026-08-02). Effective cutoff 2026-06-29 -> only ~1 month of clean window as of 2026-08; see HANDOVER for the dual-track plan."
+    },
+    "deepseek-v4-flash": {
+      "cutoff": "2026-04-30",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "Same basis as deepseek-v4-pro (no official value; release 2026-04; max+60d)."
+    },
+    "deepseek-v3": {
+      "cutoff": "2024-07-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "No official cutoff. Third-party sources conflict (Oct 2023 vs Jul 2024); adopted max=Jul 2024 + 60d buffer (operator research 2026-08-02). Effective 2024-09-29 -> ~23 months of clean window: the long-window validation model."
+    },
+    "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs (official cutoffs published) before use"},
+    "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs before use"},
+    "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs before use"}
   }
 }
