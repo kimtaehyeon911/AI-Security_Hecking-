@@ -1,6 +1,12 @@
 {
-  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the model's EFFECTIVE cutoff (cutoff + buffer_days) or its decisions may be contaminated by memorized outcomes. DIRECTION OF CONSERVATISM: contamination lies BEFORE the cutoff, so when sources disagree adopt the LATEST candidate date (max across sources) and add buffer_days (30-60) for residual uncertainty — an early date would classify contaminated dates as clean, defeating the gate. 'verified: true' means the OPERATOR adopted the value after research and takes responsibility for it (some vendors, incl. DeepSeek/Meta/Mistral, publish no official cutoff — record the basis in 'note'). Unverified/null entries classify as 'unknown' (never guessed clean). Dates are ISO 'YYYY-MM-DD'.",
+  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the model's EFFECTIVE cutoff (cutoff + buffer_days) or its decisions may be contaminated by memorized outcomes. DIRECTION OF CONSERVATISM: contamination lies BEFORE the cutoff, so when sources disagree adopt the LATEST candidate date (max across sources) and add buffer_days (30-60) for residual uncertainty — an early date would classify contaminated dates as clean, defeating the gate. 'verified: true' means the OPERATOR adopted the value after research and takes responsibility for it (some vendors, incl. DeepSeek/Meta/Mistral, publish no official cutoff — record the basis in 'note'). Unverified/null entries classify as 'unknown' (never guessed clean). 'contamination_exempt: true' is ONLY for deterministic non-LLM strategies (e.g. the price-momentum reference model) that cannot memorize outcomes — never set it on an LLM. Dates are ISO 'YYYY-MM-DD'.",
   "models": {
+    "fake-momentum": {
+      "cutoff": null,
+      "verified": false,
+      "contamination_exempt": true,
+      "note": "Deterministic trailing-momentum reference model (vts/backtest/model.py). Reads only point-in-time prices as-of the clock and has no learned parameters, so it cannot recall future outcomes — inherently clean at any date. This exemption is valid ONLY because the strategy is non-LLM and deterministic; do NOT copy it to any LLM entry."
+    },
     "deepseek-v4-pro": {
       "cutoff": "2026-04-30",
       "buffer_days": 60,

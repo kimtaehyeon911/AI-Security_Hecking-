@@ -338,3 +338,26 @@ aborting on first failure; `EXPIRED_IN_MATCH`-style statuses reading as accepted
 normalized into the denylist vocabulary, verbatim kept in `raw_status`); two account snapshots straddling
 a fill (single `account_snapshot`); unquantized exits self-rejecting forever (paper + live); float-drift
 lot loss; dust stranding. Tests: 226 passing, 93% coverage.
+
+## Contamination exemption for deterministic non-LLM strategies (2026-08-02)
+The knowledge-cutoff gate classified the deterministic reference model (`FakeMomentumModel`,
+`model_id="fake-momentum"`) as **UNKNOWN**, because it carries no cutoff date — so every offline
+harness/backtest with the default model read "not certifiable", which is wrong: a rule that reads only
+point-in-time prices as-of the clock and has **no learned parameters** cannot have memorized any
+outcome, so it is inherently clean at any date. Added an explicit, per-model `contamination_exempt`
+flag (`CutoffRegistry.is_exempt`): `classify` and `segment_status` both short-circuit to **CLEAN** for
+an exempt model. The flag is opt-in and defaults off (absent/falsey → not exempt), scoped to a single
+registry entry precisely so it cannot become a general loophole — the docstring and the JSON `_comment`
+both state it must **never** be set on an LLM. `fake-momentum` ships exempt; all LLM entries stay
+UNKNOWN until their cutoff is filled. Regression coverage: exempt→CLEAN at far-past/far-future dates,
+`segment_status` exempt→CLEAN (the path the engine actually uses), default-off proof, and two
+end-to-end runs through the **shipped** registry — a deepseek-v3 window after its effective cutoff
+certifies clean, a deepseek-v4-pro window before its effective cutoff passes on returns but is refused
+as contaminated/reference-only. The prior engine test asserting momentum→"unknown" was updated to the
+now-correct "clean". Tests: 245 passing.
+
+**Environmental blocker (unchanged, restated):** real Binance data ingest / backtest / paper cannot run
+in this sandbox — the org egress proxy returns 403 CONNECT for both `api.binance.com` and
+`testnet.binance.vision` (a policy denial, not retried per proxy rules). The gate logic above is
+therefore verified only against synthetic in-memory PIT stores here; the go-live sequence in
+HANDOVER §3 must be executed in an environment where Binance egress is permitted.

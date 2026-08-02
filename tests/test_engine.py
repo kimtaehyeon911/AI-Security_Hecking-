@@ -67,7 +67,7 @@ def test_costs_are_charged_and_reduce_equity():
     assert zero.final_equity >= free.final_equity
 
 
-def test_segment_reports_tag_contamination_unknown():
+def test_segment_reports_tag_contamination_clean_for_exempt_momentum():
     store, dts = _make_store()
     model = FakeMomentumModel(store)
     decision_dates = [dts[i] for i in (25, 28, 31, 34, 37, 40)]
@@ -76,8 +76,9 @@ def test_segment_reports_tag_contamination_unknown():
     folds = walk_forward(decision_dates, train_size=2, test_size=2)
     reports = bt.segment_reports(result, folds)
     assert reports, "expected at least one fold report"
-    # Bundled cutoff registry is unverified -> every segment is 'unknown' (never guessed clean).
-    assert all(r.contamination == "unknown" for r in reports)
+    # The deterministic momentum model ships contamination-exempt (it cannot memorize
+    # outcomes), so every segment reads 'clean' — not 'unknown'.
+    assert all(r.contamination == "clean" for r in reports)
 
 
 def test_uptrend_long_makes_money_gross():

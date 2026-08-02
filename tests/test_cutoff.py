@@ -68,3 +68,45 @@ def test_shipped_registry_deepseek_entries_and_direction():
     assert reg.classify("deepseek-v3", date(2024, 10, 1)) == Contamination.CLEAN
     # Models with published official cutoffs stay unfilled until read from docs.
     assert reg.classify("gpt-5.5", date(2024, 1, 1)) == Contamination.UNKNOWN
+
+
+# --- contamination exemption (deterministic non-LLM strategies) ---------------
+def test_exempt_model_is_clean_at_any_date():
+    """A deterministic non-LLM strategy has no cutoff risk -> CLEAN, never UNKNOWN,
+    even though it carries no cutoff date."""
+    reg = CutoffRegistry({"m": {"cutoff": None, "verified": False,
+                                "contamination_exempt": True}})
+    assert reg.is_exempt("m") is True
+    # Far past and far future both classify clean — nothing to memorize.
+    assert reg.classify("m", date(1990, 1, 1)) == Contamination.CLEAN
+    assert reg.classify("m", date(2099, 1, 1)) == Contamination.CLEAN
+
+
+def test_exempt_segment_status_is_clean_not_unknown():
+    """The engine tags folds via segment_status; an exempt model with no cutoff
+    must still read CLEAN there (regression: it used to short-circuit UNKNOWN)."""
+    reg = CutoffRegistry({"m": {"cutoff": None, "verified": False,
+                                "contamination_exempt": True}})
+    dates = [date(2024, 1, 1), date(2026, 12, 31)]
+    assert reg.segment_status("m", dates) == Contamination.CLEAN
+
+
+def test_exemption_defaults_off_and_needs_explicit_flag():
+    """Absent or falsey -> NOT exempt: the escape hatch can't be entered by default."""
+    assert CutoffRegistry({"m": {"cutoff": None, "verified": False}}).is_exempt("m") is False
+    assert CutoffRegistry({"m": {"contamination_exempt": False}}).is_exempt("m") is False
+    assert CutoffRegistry({}).is_exempt("absent") is False
+    # A non-exempt model with no verified cutoff stays UNKNOWN (unchanged behavior).
+    assert CutoffRegistry({"m": {"cutoff": None, "verified": False}}).classify(
+        "m", date(2024, 7, 1)) == Contamination.UNKNOWN
+
+
+def test_shipped_registry_momentum_reference_is_exempt():
+    """The bundled deterministic momentum model (model_id 'fake-momentum') ships
+    exempt, so offline harness runs certify as clean instead of unknown."""
+    reg = CutoffRegistry.load()
+    assert reg.is_exempt("fake-momentum") is True
+    assert reg.classify("fake-momentum", date(2025, 3, 1)) == Contamination.CLEAN
+    assert reg.segment_status("fake-momentum", [date(2025, 3, 1)]) == Contamination.CLEAN
+    # The exemption is scoped to that one entry — LLM entries are NOT exempt.
+    assert reg.is_exempt("deepseek-v4-pro") is False

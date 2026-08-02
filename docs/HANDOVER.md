@@ -29,7 +29,7 @@ Binance klines (공개 API)
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/python -m pytest            # 237개 전부 green이어야 정상
+.venv/bin/python -m pytest            # 245개 전부 green이어야 정상
 cp .env.example .env                  # 키 기입 (절대 커밋 금지)
 
 .venv/bin/python -m vts ingest   --start 2025-01-01 --end 2025-06-30
@@ -42,8 +42,11 @@ cp .env.example .env                  # 키 기입 (절대 커밋 금지)
 
 - `backtest`의 **종료 코드가 게이트 판정**입니다: 0 = PASS(비용차감 후 buy&hold와 60/40을 모두
   초과), 1 = FAIL. CI에 그대로 물릴 수 있습니다.
-- 기본 모델은 결정론적 `momentum`(오프라인 검증용). LLM 그래프는 fork 설치 + `.env`의 LLM 키 후
-  `--model tradingagents` — 이때 N=3 다수결이 자동 기본값입니다(`--samples`로 조정).
+- 기본 모델은 결정론적 `momentum`(오프라인 검증용). 학습 파라미터가 없어 미래를 기억할 수 없으므로
+  cutoff 게이트에서 **오염 면제(contamination_exempt)** — 어떤 구간이든 `clean`으로 인증됩니다
+  (`model_cutoffs.json`의 `fake-momentum`). 이 면제는 결정론적 비-LLM 전략 전용이며 LLM 항목에는
+  절대 설정하지 않습니다. LLM 그래프는 fork 설치 + `.env`의 LLM 키 후 `--model tradingagents` —
+  이때 N=3 다수결이 자동 기본값입니다(`--samples`로 조정).
 - **`vts live`는 드라이런이어도 테스트넷 키가 필요**합니다(자본 한도·주문 검증이 실계좌 스냅샷
   기준이라 서명 호출이 필수). 키가 없으면 명확한 에러로 중단됩니다.
 - **재적재(re-ingest) 후에는 캐시가 자동 무효화**됩니다(결정 캐시 키에 가시 바 지문 포함).

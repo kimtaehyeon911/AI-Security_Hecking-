@@ -69,8 +69,21 @@ class CutoffRegistry:
             # certifies a segment clean on a value it cannot parse.
             return None
 
+    def is_exempt(self, model_id: str) -> bool:
+        """Whether a model has no knowledge-cutoff risk at all.
+
+        Only for DETERMINISTIC, non-LLM strategies (e.g. a pure price-momentum
+        rule) that cannot have memorized any outcome — those are inherently clean
+        at any date. Never set this on an LLM: it is an explicit, per-model escape
+        hatch, not a default, precisely so it cannot become a loophole.
+        """
+        entry = self._models.get(model_id)
+        return bool(entry and entry.get("contamination_exempt"))
+
     def classify(self, model_id: str, decision_date: date | datetime) -> Contamination:
         """Classify one decision date for one model."""
+        if self.is_exempt(model_id):
+            return Contamination.CLEAN
         d = decision_date.date() if isinstance(decision_date, datetime) else decision_date
         cutoff = self.cutoff_for(model_id)
         if cutoff is None:
@@ -82,6 +95,8 @@ class CutoffRegistry:
     ) -> Contamination:
         """A segment is CLEAN only if every date is clean; UNKNOWN if cutoff is unset;
         otherwise CONTAMINATED if any date is on/before the cutoff."""
+        if self.is_exempt(model_id):
+            return Contamination.CLEAN
         if self.cutoff_for(model_id) is None:
             return Contamination.UNKNOWN
         statuses = {self.classify(model_id, d) for d in dates}

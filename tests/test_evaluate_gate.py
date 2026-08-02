@@ -120,6 +120,56 @@ def test_gate_certifiable_with_verified_clean_cutoff():
     assert report.gate.contamination == "clean"
 
 
+class _NamedRatingModel(_RatingModel):
+    """A rating model whose model_id can be set — to exercise the SHIPPED cutoff
+    registry end-to-end against a specific model's effective cutoff."""
+
+    def __init__(self, model_id: str, ratings: dict[str, Rating]):
+        super().__init__(ratings)
+        self.model_id = model_id
+
+
+def _downtrend_at(year: int, month: int):
+    """DN falls 100->50 over 5 weekly bars starting (year, month, 1)."""
+    store = PointInTimeStore()
+    closes = [100, 90, 80, 65, 50]
+    dates = []
+    for i, c in enumerate(closes):
+        t = utc(year, month, 1 + i * 7, 21)
+        store.append(OHLCVBar(symbol="DN", event_time=t, knowledge_time=t, source="t",
+                              open=c, high=c, low=c, close=c, volume=1_000_000))
+        dates.append(t)
+    return store, dates
+
+
+def test_shipped_registry_certifies_v3_clean_window_end_to_end():
+    """Through the REAL registry: a deepseek-v3 backtest entirely after its effective
+    cutoff (2024-09-29) both beats benchmarks AND certifies as clean."""
+    store, dates = _downtrend_at(2024, 11)   # Nov 2024, all > 2024-09-29
+    model = _NamedRatingModel("deepseek-v3", {"DN": Rating.SELL})
+    bt = Backtester(store, model, cost_model=FREE,
+                    cutoff=CutoffRegistry.load(), config=BacktestConfig(n_samples=1))
+    report = evaluate(bt, bt.run(["DN"], dates), ["DN"])
+    assert report.gate.passed is True
+    assert report.gate.contamination == "clean"
+    assert report.gate.certifiable is True
+
+
+def test_shipped_registry_refuses_v4_era_window_end_to_end():
+    """Same winning strategy, but a deepseek-v4-pro backtest before its effective
+    cutoff (2026-06-29): still PASSES on returns yet is NOT certifiable — the gate
+    labels it contaminated/reference-only, exactly the case the mandate guards."""
+    store, dates = _downtrend_at(2026, 5)    # May 2026, all <= 2026-06-29
+    model = _NamedRatingModel("deepseek-v4-pro", {"DN": Rating.SELL})
+    bt = Backtester(store, model, cost_model=FREE,
+                    cutoff=CutoffRegistry.load(), config=BacktestConfig(n_samples=1))
+    report = evaluate(bt, bt.run(["DN"], dates), ["DN"])
+    assert report.gate.passed is True            # returns beat the benchmarks...
+    assert report.gate.contamination == "contaminated"
+    assert report.gate.certifiable is False      # ...but memorization can't be ruled out
+    assert "참고용" in report.gate.verdict
+
+
 # --- LLM costs ----------------------------------------------------------------
 def test_cost_tracker_counts_calls_and_cache_hits():
     store, dates = _downtrend_setup()
