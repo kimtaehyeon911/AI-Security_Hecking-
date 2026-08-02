@@ -52,7 +52,7 @@ def _make_source(settings: Settings):
     raise SystemExit(f"unknown data source {settings.data_source!r}")
 
 
-def _make_model(name: str, store: PointInTimeStore):
+def _make_model(name: str, store: PointInTimeStore, settings: Settings):
     if name == "momentum":
         return FakeMomentumModel(store)
     if name == "tradingagents":
@@ -63,7 +63,14 @@ def _make_model(name: str, store: PointInTimeStore):
                 "the TradingAgents fork is not installed; install it and set the "
                 "LLM keys in .env before using --model tradingagents"
             ) from exc
-        return TradingAgentsDecisionModel(store)
+        # Key the contamination gate on the ACTUAL reasoning model, not a generic
+        # "tradingagents" label: the deep-think LLM (VTS_DEEP_THINK_LLM) is what
+        # could have memorized outcomes, and its id must match a cutoff-registry
+        # entry (e.g. deepseek-v3 / deepseek-v4-pro) for the gate to classify the
+        # window instead of degrading to UNKNOWN. This is what makes the dual-track
+        # plan work: VTS_DEEP_THINK_LLM=deepseek-v3 certifies a clean window;
+        # the default deepseek-v4-pro is correctly flagged contaminated pre-cutoff.
+        return TradingAgentsDecisionModel(store, model_id=settings.deep_think_llm)
     raise SystemExit(f"unknown model {name!r}")
 
 
@@ -128,7 +135,7 @@ def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
         print("not enough bars in the store for this window — run `ingest` first",
               file=sys.stderr)
         return 2
-    model = _make_model(args.model, store)
+    model = _make_model(args.model, store, settings)
     bt = Backtester(
         store, model,
         cache=_cache(args, settings),
@@ -157,7 +164,7 @@ def cmd_paper(args: argparse.Namespace, settings: Settings) -> int:
         print("no bars in the store for this window — run `ingest` first", file=sys.stderr)
         return 2
     trader = PaperTrader(
-        store, _make_model(args.model, store), RiskEngine(RiskLimits.from_env()),
+        store, _make_model(args.model, store, settings), RiskEngine(RiskLimits.from_env()),
         venue=_venue(settings), state_path=settings.data_dir / "paper_state.json",
         cache=_cache(args, settings),
         config=BacktestConfig(n_samples=_samples(args)),
@@ -181,7 +188,7 @@ def cmd_live(args: argparse.Namespace, settings: Settings) -> int:
     store = PointInTimeStore(settings.store_path)
     date = _parse_date(args.date) if args.date else datetime.now(_UTC)
     trader = LiveTrader(
-        store, _make_model(args.model, store), RiskEngine(RiskLimits.from_env()),
+        store, _make_model(args.model, store, settings), RiskEngine(RiskLimits.from_env()),
         BinanceBroker(),  # TESTNET unless the adapter is explicitly pointed at prod
         venue=_venue(settings),
         live_config=LiveConfig(allocated_capital=args.capital,
