@@ -17,8 +17,11 @@ require_env BINANCE_API_SECRET
 info "using testnet keys (adapter base URL defaults to testnet.binance.vision)"
 
 # Kill switch must NOT be engaged, or every cycle just latches a liquidation.
-if [ -n "${VTS_KILL_SWITCH:-}" ]; then
-  die "VTS_KILL_SWITCH is set ('$VTS_KILL_SWITCH') — unset it before a smoke test"
+# Defer to the engine's OWN semantics so this guard never disagrees with the code
+# that consumes the var: VTS_KILL_SWITCH=0/false/off/none/... count as OFF, any
+# other non-empty value is engaged (kill_switch_active in vts/risk/killswitch.py).
+if "$PY" -c 'import sys; from vts.risk.killswitch import kill_switch_active; sys.exit(0 if kill_switch_active() else 1)'; then
+  die "VTS_KILL_SWITCH is engaged ('${VTS_KILL_SWITCH:-}') — unset/disable it before a smoke test"
 fi
 
 say "Gate 4 phase 1: DRY-RUN cycle (submits nothing), capital=$LIVE_CAPITAL"

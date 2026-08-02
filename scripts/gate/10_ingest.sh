@@ -17,16 +17,19 @@ say "store overview"
 "$PY" -m vts status
 
 # A store with almost no bars means egress silently returned little; catch it here
-# rather than in a misleading backtest. Require a plausible daily-bar count.
-min_bars="$(( $(date -d "$BACKTEST_END" +%s) - $(date -d "$BACKTEST_START" +%s) ))"
-min_bars=$(( min_bars / 86400 / 3 ))   # at least ~1/3 of calendar days as bars
-"$PY" - "$BACKTEST_START" "$BACKTEST_END" "$min_bars" <<'PY' || die "too few bars ingested — check egress/window"
+# rather than in a misleading backtest. The bar threshold is derived from the
+# window IN PYTHON (no GNU-only `date -d`, so the script is portable to BSD/macOS).
+"$PY" - "$BACKTEST_START" "$BACKTEST_END" <<'PY' || die "too few bars ingested — check egress/window"
 import sys
 from datetime import datetime, timedelta, timezone
 from vts.config import load_settings
 from vts.pit.clock import AsOfClock
 from vts.pit.store import PointInTimeStore
-start, end, need = sys.argv[1], sys.argv[2], int(sys.argv[3])
+start = datetime.strptime(sys.argv[1], "%Y-%m-%d")
+end = datetime.strptime(sys.argv[2], "%Y-%m-%d")
+# Require at least ~1/3 of the window's calendar days as bars for the WORST symbol
+# — a coarse "egress didn't silently return almost nothing" tripwire.
+need = max((end - start).days // 3, 1)
 s = load_settings()
 if not s.store_path.exists():
     print(f"store not found at {s.store_path}", file=sys.stderr); sys.exit(1)
