@@ -127,8 +127,22 @@ def test_shipped_registry_gemini_official_jan_2025_cutoffs():
         assert reg.classify(m, date(2025, 4, 1)) == Contamination.CONTAMINATED   # boundary
         assert reg.classify(m, date(2025, 4, 2)) == Contamination.CLEAN
     assert reg.cutoff_for("gemini-2.0-flash") == date(2024, 10, 30)  # 2024-08-31 + 60d
-    # Newer variants the operator's key exposes are NOT researched -> must stay UNKNOWN.
-    assert reg.classify("gemini-3.5-flash", date(2026, 1, 1)) == Contamination.UNKNOWN
+
+
+def test_shipped_registry_gemini_3_flash_family():
+    """gemini-3.5-flash keeps the Jan-2025 cutoff (new-user-callable validation
+    model); gemini-3.6-flash moved to March 2026 (forward/paper only)."""
+    reg = CutoffRegistry.load()
+    # 3.5-flash: official Jan 2025 -> effective 2025-04-01 (same long clean window).
+    assert reg.cutoff_for("gemini-3.5-flash") == date(2025, 4, 1)
+    assert reg.classify("gemini-3.5-flash", date(2025, 3, 15)) == Contamination.CONTAMINATED
+    assert reg.classify("gemini-3.5-flash", date(2025, 6, 1)) == Contamination.CLEAN
+    # 3.6-flash: official March 2026 -> effective 2026-05-30 (tiny clean window).
+    assert reg.cutoff_for("gemini-3.6-flash") == date(2026, 5, 30)
+    assert reg.classify("gemini-3.6-flash", date(2026, 5, 1)) == Contamination.CONTAMINATED
+    assert reg.classify("gemini-3.6-flash", date(2026, 7, 1)) == Contamination.CLEAN
+    # Still-unresearched variants stay UNKNOWN (gate never guesses).
+    assert reg.classify("gemini-3.1-pro-preview", date(2026, 1, 1)) == Contamination.UNKNOWN
 
 
 def test_shipped_registry_momentum_reference_is_exempt():

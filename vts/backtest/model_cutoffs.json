@@ -49,6 +49,18 @@
       "verified": true,
       "note": "OFFICIAL Google value 'August 2024' (ai.google.dev model page + model card). Normalized 2024-08-31 + 60d -> effective 2024-10-30. DEPRECATED: Gemini 2.0 Flash API was shut down 2026-06-01 and no longer serves -> reference only, not usable for live runs. (operator research 2026-08-13)."
     },
+    "gemini-3.5-flash": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'January 2025' (DeepMind Gemini 3.5 Flash model card + ai.google.dev/gemini-api/docs/whats-new-gemini-3.5; built on the Gemini 3 Flash foundation). Normalized 2025-01-31 + 60d -> effective 2025-04-01 -> ~16-month clean crypto window as of 2026-08. Available to NEW API users (unlike the restricted gemini-2.5-*, which 404 'not available to new users'), flash-tier = cheap for the multi-call agent graph -> RECOMMENDED validation model. Sources: deepmind.google/models/model-cards/gemini-3-5-flash (operator research 2026-08-13)."
+    },
+    "gemini-3.6-flash": {
+      "cutoff": "2026-03-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'March 2026' — cutoff moved forward vs 3.5 Flash's Jan 2025 (DeepMind Gemini 3.6 Flash model card; some AI-Studio flux noted). Normalized 2026-03-31 + 60d -> effective 2026-05-30 -> only ~2-3 months of clean window as of 2026-08. FORWARD/PAPER track only (like DeepSeek V4); do NOT use for a backtest-validation window. Sources: deepmind.google/models/model-cards/gemini-3-6-flash (operator research 2026-08-13)."
+    },
     "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs (official cutoffs published) before use"},
     "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs before use"},
     "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs before use"}
