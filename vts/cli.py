@@ -63,14 +63,32 @@ def _make_model(name: str, store: PointInTimeStore, settings: Settings):
                 "the TradingAgents fork is not installed; install it and set the "
                 "LLM keys in .env before using --model tradingagents"
             ) from exc
-        # Key the contamination gate on the ACTUAL reasoning model, not a generic
-        # "tradingagents" label: the deep-think LLM (VTS_DEEP_THINK_LLM) is what
-        # could have memorized outcomes, and its id must match a cutoff-registry
-        # entry (e.g. deepseek-v3 / deepseek-v4-pro) for the gate to classify the
-        # window instead of degrading to UNKNOWN. This is what makes the dual-track
-        # plan work: VTS_DEEP_THINK_LLM=deepseek-v3 certifies a clean window;
-        # the default deepseek-v4-pro is correctly flagged contaminated pre-cutoff.
-        return TradingAgentsDecisionModel(store, model_id=settings.deep_think_llm)
+        def _graph_factory():
+            # Build the graph with the vts-selected LLM. The fork constructs its
+            # deep/quick clients from config["llm_provider"|"deep_think_llm"|
+            # "quick_think_llm"] (verified against TradingAgentsGraph.__init__), so we
+            # base on its live config (preserving non-LLM defaults) and override only
+            # those three. Provider/models come from VTS_LLM_PROVIDER /
+            # VTS_DEEP_THINK_LLM / VTS_QUICK_THINK_LLM — e.g. google + gemini-2.5-pro.
+            # The API key is read by the fork's client from the environment
+            # (GOOGLE_API_KEY for Gemini). Temperature is left to the fork's default:
+            # do NOT pin it to 0, or the N-sample vote collapses to zero dispersion.
+            from tradingagents.dataflows.config import get_config
+            from tradingagents.graph.trading_graph import TradingAgentsGraph
+            cfg = dict(get_config())
+            cfg["llm_provider"] = settings.llm_provider
+            cfg["deep_think_llm"] = settings.deep_think_llm
+            cfg["quick_think_llm"] = settings.quick_think_llm
+            return TradingAgentsGraph(config=cfg)
+
+        # model_id keys the contamination gate on the ACTUAL reasoning model, not a
+        # generic "tradingagents" label: the deep-think LLM (VTS_DEEP_THINK_LLM) is
+        # what could have memorized outcomes, so its id must match a cutoff-registry
+        # entry (e.g. gemini-2.5-pro) or the gate degrades to UNKNOWN. For Gemini the
+        # API model name and the registry key coincide, so deep_think_llm serves both.
+        return TradingAgentsDecisionModel(
+            store, model_id=settings.deep_think_llm, graph_factory=_graph_factory
+        )
     raise SystemExit(f"unknown model {name!r}")
 
 

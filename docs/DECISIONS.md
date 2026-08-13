@@ -361,3 +361,30 @@ in this sandbox — the org egress proxy returns 403 CONNECT for both `api.binan
 `testnet.binance.vision` (a policy denial, not retried per proxy rules). The gate logic above is
 therefore verified only against synthetic in-memory PIT stores here; the go-live sequence in
 HANDOVER §3 must be executed in an environment where Binance egress is permitted.
+
+## LLM track = Gemini (operator switched from DeepSeek), 2026-08-13
+Operator ran the offline gates locally (Windows): real Binance data flows (BTC/ETH/SOL 334 bars),
+pipeline end-to-end, momentum certified **clean** (exemption works). Cross-regime falsification on real
+data — momentum **PASS** in the 2022 bear (−6.85% vs −75% buy&hold) and the 2024-10→2025-06 window, but
+**FAIL** in the 2023 bull (+22% vs +389%) and 2024 H1 — is strong evidence of **no look-ahead leak**: a
+peeking backtest could not underperform a +389% bull by 367pp. momentum is thus a validated,
+regime-dependent **toy** (not a live strategy; 13.5×/yr turnover); the single-window PASS was regime luck.
+
+LLM provider switched to **Google Gemini** (operator's available key). Research workflow (4 agents +
+synthesis, web egress works here even though Binance does not) established Google-**official** cutoffs:
+Gemini 2.5 Pro / 2.5 Flash / 3 Pro all state **January 2025** (DeepMind model cards + ai.google.dev),
+Gemini 2.0 Flash states **August 2024**. Adopted `max`→last-day-of-month + 60d buffer per the direction
+rule: 2.5/3 → effective **2025-04-01** (~16-month clean crypto window as of 2026-08 — far better than
+DeepSeek V4's weeks); 2.0-flash → 2024-10-30 (deprecated, API shut down 2026-06, reference only). All
+`verified: true` with sources in each `note`. **Newer variants the key exposes (gemini-3.1-pro-preview,
+3.5-flash, 3.6-flash) are NOT researched → stay UNKNOWN** (gate never guesses); recommended validation
+model is **gemini-2.5-pro** (deep) + **gemini-2.5-flash** (quick).
+
+Wiring: `_make_model` now builds the fork graph via a `graph_factory` that overrides
+`llm_provider/deep_think_llm/quick_think_llm` on the fork's live config from `VTS_*` settings
+(`TradingAgentsGraph(config=…)`, verified against the 0.3.1 constructor). Gemini's API model name and the
+registry key coincide, so `VTS_DEEP_THINK_LLM=gemini-2.5-pro` serves both the LLM call and the
+contamination gate. **Unverified end-to-end**: the fork+key path has not been run here (no fork/LLM
+egress in this sandbox). First real run must confirm (a) the PIT vendor actually routes graph data reads
+to the store (not yfinance — else look-ahead leak), and (b) dispersion is non-zero under N=3. Tests: 257
+passing.

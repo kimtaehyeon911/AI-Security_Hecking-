@@ -25,6 +25,30 @@
       "verified": true,
       "note": "No official cutoff. Third-party sources conflict (Oct 2023 vs Jul 2024); adopted max=Jul 2024 + 60d buffer (operator research 2026-08-02). Effective 2024-09-29 -> ~23 months of clean window: the long-window validation model."
     },
+    "gemini-2.5-pro": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'January 2025' (ai.google.dev Gemini API model page + Vertex model page; gemini-cli issue #10114 states 'January 31, 2025'). Month-granularity normalized to last day 2025-01-31 + 60d buffer per direction rule -> effective 2025-04-01 -> ~16-month clean crypto window as of 2026-08. Runtime self-reports of mid-2024 are the model's own unreliable claim, not Google's documented cutoff. Sources: ai.google.dev/gemini-api/docs/models/gemini-2.5-pro; github.com/google-gemini/gemini-cli/issues/10114 (operator research 2026-08-13). Recommended deep-think model for the validation track."
+    },
+    "gemini-2.5-flash": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value. DeepMind Gemini 2.5 Flash Model Card: 'The knowledge cutoff date for Gemini 2.5 Flash ... was January 2025.' Normalized 2025-01-31 + 60d -> effective 2025-04-01. Sources: storage.googleapis.com/deepmind-media/Model-Cards/Gemini-2-5-Flash-Model-Card.pdf (operator research 2026-08-13). Recommended quick-think model."
+    },
+    "gemini-3-pro": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value. DeepMind Gemini 3 Pro Model Card: 'The knowledge cutoff date for Gemini 3 Pro was January 2025.' All official + third-party sources concur. Normalized 2025-01-31 + 60d -> effective 2025-04-01. NOTE: the plain 'gemini-3-pro' text model may be served via aliases (gemini-pro-latest) or superseded by gemini-3.1-pro-preview, whose cutoff is NOT yet researched (would classify UNKNOWN). Sources: storage.googleapis.com/deepmind-media/Model-Cards/Gemini-3-Pro-Model-Card.pdf; ai.google.dev/gemini-api/docs/gemini-3 (operator research 2026-08-13)."
+    },
+    "gemini-2.0-flash": {
+      "cutoff": "2024-08-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'August 2024' (ai.google.dev model page + model card). Normalized 2024-08-31 + 60d -> effective 2024-10-30. DEPRECATED: Gemini 2.0 Flash API was shut down 2026-06-01 and no longer serves -> reference only, not usable for live runs. (operator research 2026-08-13)."
+    },
     "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs (official cutoffs published) before use"},
     "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs before use"},
     "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs before use"}

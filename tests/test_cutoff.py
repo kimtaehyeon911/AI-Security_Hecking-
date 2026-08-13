@@ -116,6 +116,21 @@ def test_exemption_defaults_off_and_needs_explicit_flag():
         "m", date(2024, 7, 1)) == Contamination.UNKNOWN
 
 
+def test_shipped_registry_gemini_official_jan_2025_cutoffs():
+    """Gemini 2.5/3 carry Google-OFFICIAL January-2025 cutoffs; +60d buffer pushes
+    the effective cutoff to 2025-04-01, so the clean crypto window starts April 2025.
+    gemini-2.0-flash is the older (Aug 2024) deprecated model."""
+    reg = CutoffRegistry.load()
+    for m in ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro"):
+        assert reg.cutoff_for(m) == date(2025, 4, 1), m            # 2025-01-31 + 60d
+        assert reg.classify(m, date(2025, 3, 15)) == Contamination.CONTAMINATED
+        assert reg.classify(m, date(2025, 4, 1)) == Contamination.CONTAMINATED   # boundary
+        assert reg.classify(m, date(2025, 4, 2)) == Contamination.CLEAN
+    assert reg.cutoff_for("gemini-2.0-flash") == date(2024, 10, 30)  # 2024-08-31 + 60d
+    # Newer variants the operator's key exposes are NOT researched -> must stay UNKNOWN.
+    assert reg.classify("gemini-3.5-flash", date(2026, 1, 1)) == Contamination.UNKNOWN
+
+
 def test_shipped_registry_momentum_reference_is_exempt():
     """The bundled deterministic momentum model (model_id 'fake-momentum') ships
     exempt, so offline harness runs certify as clean instead of unknown."""
