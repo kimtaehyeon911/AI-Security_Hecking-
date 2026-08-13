@@ -41,10 +41,15 @@ class CutoffRegistry:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> CutoffRegistry:
+        # Pin UTF-8 explicitly: the registry file contains non-ASCII (em dashes,
+        # Korean notes), and read_text() without an encoding uses the locale
+        # codepage — which is cp949 on Korean Windows and raises UnicodeDecodeError.
         if path is None:
-            text = resources.files("vts.backtest").joinpath("model_cutoffs.json").read_text()
+            text = resources.files("vts.backtest").joinpath("model_cutoffs.json").read_text(
+                encoding="utf-8"
+            )
         else:
-            text = Path(path).read_text()
+            text = Path(path).read_text(encoding="utf-8")
         data = json.loads(text)
         return cls(data.get("models", {}))
 

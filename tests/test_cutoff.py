@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date
+from importlib import resources
+
+import pytest
 
 from vts.backtest.cutoff import Contamination, CutoffRegistry
 
@@ -54,6 +57,18 @@ def test_negative_buffer_refused_as_unknown():
     """A negative buffer would WIDEN the clean window — refuse, never permit."""
     reg = CutoffRegistry({"m": {"cutoff": "2026-04-30", "buffer_days": -30, "verified": True}})
     assert reg.classify("m", date(2026, 5, 1)) == Contamination.UNKNOWN
+
+
+def test_registry_load_pins_utf8_not_locale_encoding():
+    """Regression: the bundled JSON has non-ASCII (em dashes, Korean notes), so a
+    locale-dependent read breaks on cp949 Windows. The file must be genuinely
+    non-cp949-decodable (proving the encoding matters) AND load() must still work
+    everywhere because it pins UTF-8."""
+    raw = resources.files("vts.backtest").joinpath("model_cutoffs.json").read_bytes()
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("cp949")            # would be the default on Korean Windows
+    # The loader pins utf-8, so it succeeds regardless of the machine's locale.
+    assert CutoffRegistry.load().cutoff_for("deepseek-v3") == date(2024, 9, 29)
 
 
 def test_shipped_registry_deepseek_entries_and_direction():

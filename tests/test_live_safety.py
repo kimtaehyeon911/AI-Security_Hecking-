@@ -181,7 +181,7 @@ def test_cycle_kill_switch_liquidates_and_refuses_to_trade(monkeypatch, tmp_path
     assert result.liquidation.complete is True      # verified flat, not assumed
     assert result.submitted == []                   # no strategy orders under the switch
     assert broker.get_positions() == []             # actually flat
-    audit = (tmp_path / "audit.log").read_text()
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
     assert "LIQUIDATE_INTENT" in audit and "LIQUIDATE_RESULT" in audit
 
 
