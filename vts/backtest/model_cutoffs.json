@@ -1,0 +1,68 @@
+{
+  "_comment": "Model knowledge-cutoff registry. A backtest window must start AFTER the model's EFFECTIVE cutoff (cutoff + buffer_days) or its decisions may be contaminated by memorized outcomes. DIRECTION OF CONSERVATISM: contamination lies BEFORE the cutoff, so when sources disagree adopt the LATEST candidate date (max across sources) and add buffer_days (30-60) for residual uncertainty — an early date would classify contaminated dates as clean, defeating the gate. 'verified: true' means the OPERATOR adopted the value after research and takes responsibility for it (some vendors, incl. DeepSeek/Meta/Mistral, publish no official cutoff — record the basis in 'note'). Unverified/null entries classify as 'unknown' (never guessed clean). 'contamination_exempt: true' is ONLY for deterministic non-LLM strategies (e.g. the price-momentum reference model) that cannot memorize outcomes — never set it on an LLM. Dates are ISO 'YYYY-MM-DD'.",
+  "models": {
+    "fake-momentum": {
+      "cutoff": null,
+      "verified": false,
+      "contamination_exempt": true,
+      "note": "Deterministic trailing-momentum reference model (vts/backtest/model.py). Reads only point-in-time prices as-of the clock and has no learned parameters, so it cannot recall future outcomes — inherently clean at any date. This exemption is valid ONLY because the strategy is non-LLM and deterministic; do NOT copy it to any LLM entry."
+    },
+    "deepseek-v4-pro": {
+      "cutoff": "2026-04-30",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "No official cutoff published by DeepSeek. V4 released 2026-04; third-party aggregators cluster near the release date. Adopted max(sources)=release month end + 60d buffer (operator research 2026-08-02). Effective cutoff 2026-06-29 -> only ~1 month of clean window as of 2026-08; see HANDOVER for the dual-track plan."
+    },
+    "deepseek-v4-flash": {
+      "cutoff": "2026-04-30",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "Same basis as deepseek-v4-pro (no official value; release 2026-04; max+60d)."
+    },
+    "deepseek-v3": {
+      "cutoff": "2024-07-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "No official cutoff. Third-party sources conflict (Oct 2023 vs Jul 2024); adopted max=Jul 2024 + 60d buffer (operator research 2026-08-02). Effective 2024-09-29 -> ~23 months of clean window: the long-window validation model."
+    },
+    "gemini-2.5-pro": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'January 2025' (ai.google.dev Gemini API model page + Vertex model page; gemini-cli issue #10114 states 'January 31, 2025'). Month-granularity normalized to last day 2025-01-31 + 60d buffer per direction rule -> effective 2025-04-01 -> ~16-month clean crypto window as of 2026-08. Runtime self-reports of mid-2024 are the model's own unreliable claim, not Google's documented cutoff. Sources: ai.google.dev/gemini-api/docs/models/gemini-2.5-pro; github.com/google-gemini/gemini-cli/issues/10114 (operator research 2026-08-13). Recommended deep-think model for the validation track."
+    },
+    "gemini-2.5-flash": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value. DeepMind Gemini 2.5 Flash Model Card: 'The knowledge cutoff date for Gemini 2.5 Flash ... was January 2025.' Normalized 2025-01-31 + 60d -> effective 2025-04-01. Sources: storage.googleapis.com/deepmind-media/Model-Cards/Gemini-2-5-Flash-Model-Card.pdf (operator research 2026-08-13). Recommended quick-think model."
+    },
+    "gemini-3-pro": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value. DeepMind Gemini 3 Pro Model Card: 'The knowledge cutoff date for Gemini 3 Pro was January 2025.' All official + third-party sources concur. Normalized 2025-01-31 + 60d -> effective 2025-04-01. NOTE: the plain 'gemini-3-pro' text model may be served via aliases (gemini-pro-latest) or superseded by gemini-3.1-pro-preview, whose cutoff is NOT yet researched (would classify UNKNOWN). Sources: storage.googleapis.com/deepmind-media/Model-Cards/Gemini-3-Pro-Model-Card.pdf; ai.google.dev/gemini-api/docs/gemini-3 (operator research 2026-08-13)."
+    },
+    "gemini-2.0-flash": {
+      "cutoff": "2024-08-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'August 2024' (ai.google.dev model page + model card). Normalized 2024-08-31 + 60d -> effective 2024-10-30. DEPRECATED: Gemini 2.0 Flash API was shut down 2026-06-01 and no longer serves -> reference only, not usable for live runs. (operator research 2026-08-13)."
+    },
+    "gemini-3.5-flash": {
+      "cutoff": "2025-01-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'January 2025' (DeepMind Gemini 3.5 Flash model card + ai.google.dev/gemini-api/docs/whats-new-gemini-3.5; built on the Gemini 3 Flash foundation). Normalized 2025-01-31 + 60d -> effective 2025-04-01 -> ~16-month clean crypto window as of 2026-08. Available to NEW API users (unlike the restricted gemini-2.5-*, which 404 'not available to new users'), flash-tier = cheap for the multi-call agent graph -> RECOMMENDED validation model. Sources: deepmind.google/models/model-cards/gemini-3-5-flash (operator research 2026-08-13)."
+    },
+    "gemini-3.6-flash": {
+      "cutoff": "2026-03-31",
+      "buffer_days": 60,
+      "verified": true,
+      "note": "OFFICIAL Google value 'March 2026' — cutoff moved forward vs 3.5 Flash's Jan 2025 (DeepMind Gemini 3.6 Flash model card; some AI-Studio flux noted). Normalized 2026-03-31 + 60d -> effective 2026-05-30 -> only ~2-3 months of clean window as of 2026-08. FORWARD/PAPER track only (like DeepSeek V4); do NOT use for a backtest-validation window. Sources: deepmind.google/models/model-cards/gemini-3-6-flash (operator research 2026-08-13)."
+    },
+    "claude-sonnet-5":   {"cutoff": null, "verified": false, "note": "set from Anthropic docs (official cutoffs published) before use"},
+    "claude-haiku-4-5":  {"cutoff": null, "verified": false, "note": "set from Anthropic docs before use"},
+    "gpt-5.5":           {"cutoff": null, "verified": false, "note": "set from OpenAI docs before use"}
+  }
+}

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints
+
+# 환경설정 / secrets — never commit
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# uv
+uv.lock
+
+# 시스템 파일
+.DS_Store
+Thumbs.db
+
+# 모델 파일
+*.pt
+*.pth
+
+# vts local data / PIT store / logs
+.vts/
+*.sqlite
+*.sqlite-*
+*.log
+*.tmp
+.cache/
+
+# coverage
+.coverage
+coverage.xml
+htmlcov/
