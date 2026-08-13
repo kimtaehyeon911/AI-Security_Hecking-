@@ -79,7 +79,11 @@ def _make_model(name: str, store: PointInTimeStore, settings: Settings):
             cfg["llm_provider"] = settings.llm_provider
             cfg["deep_think_llm"] = settings.deep_think_llm
             cfg["quick_think_llm"] = settings.quick_think_llm
-            return TradingAgentsGraph(config=cfg)
+            # selected_analysts is a cost lever (VTS_TA_ANALYSTS): running analysts
+            # whose data is empty (crypto news/fundamentals) only burns LLM calls.
+            return TradingAgentsGraph(
+                selected_analysts=tuple(settings.ta_analysts), config=cfg
+            )
 
         # model_id keys the contamination gate on the ACTUAL reasoning model, not a
         # generic "tradingagents" label: the deep-think LLM (VTS_DEEP_THINK_LLM) is

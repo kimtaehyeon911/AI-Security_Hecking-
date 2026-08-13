@@ -103,3 +103,12 @@ def test_non_finite_budget_rejected(monkeypatch):
     monkeypatch.setenv("VTS_MONTHLY_BUDGET_USD", "nan")
     with pytest.raises(ValueError, match="finite"):
         Settings.from_env()
+
+
+def test_ta_analysts_env_parses_and_defaults(monkeypatch):
+    # Default: the full four-analyst set.
+    monkeypatch.delenv("VTS_TA_ANALYSTS", raising=False)
+    assert Settings.from_env().ta_analysts == ["market", "social", "news", "fundamentals"]
+    # Cost lever: a comma list is parsed and trimmed (crypto -> market only).
+    monkeypatch.setenv("VTS_TA_ANALYSTS", " market , news ")
+    assert Settings.from_env().ta_analysts == ["market", "news"]

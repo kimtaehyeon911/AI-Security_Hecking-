@@ -47,6 +47,13 @@ class Settings(BaseModel):
     deep_think_llm: str = "deepseek-v4-pro"
     quick_think_llm: str = "deepseek-v4-flash"
     temperature: float = 0.0
+    # Which TradingAgents analysts to run (cost lever). The full set is
+    # market/social/news/fundamentals; for a crypto profile with no news/
+    # fundamentals in the store, the extra analysts only burn LLM calls on empty
+    # data — set VTS_TA_ANALYSTS=market (or market,news) to cut cost ~4x.
+    ta_analysts: list[str] = Field(
+        default_factory=lambda: ["market", "social", "news", "fundamentals"]
+    )
     monthly_budget_usd: float = 30.0
 
     # --- cadence -------------------------------------------------------------
@@ -76,6 +83,8 @@ class Settings(BaseModel):
             raw["deep_think_llm"] = env["VTS_DEEP_THINK_LLM"]
         if "VTS_QUICK_THINK_LLM" in env:
             raw["quick_think_llm"] = env["VTS_QUICK_THINK_LLM"]
+        if env.get("VTS_TA_ANALYSTS"):
+            raw["ta_analysts"] = [s.strip() for s in env["VTS_TA_ANALYSTS"].split(",") if s.strip()]
         if "VTS_TEMPERATURE" in env:
             raw["temperature"] = _env_float("VTS_TEMPERATURE", env["VTS_TEMPERATURE"])
         if "VTS_MONTHLY_BUDGET_USD" in env:
